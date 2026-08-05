@@ -30,7 +30,7 @@ BEGIN_RE = re.compile(
 )
 # A slug becomes a directory name. Reject what breaks paths -- not what is
 # simply not ASCII: repositories are legitimately named in any language.
-BAD_SLUG_CHARS = set('/\:*?"<>|')
+BAD_SLUG_CHARS = set(r'/\:*?"<>|')
 
 
 def slug_ok(slug: str) -> bool:
