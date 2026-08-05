@@ -160,4 +160,4 @@ The token is only injected by the runner. A direct `wikictl ingest` uses the `cl
 
 ## Supporting CLIs
 
-`bin/wiki_queue.py list|show|mark|stats` is the deterministic queue interface used by the ingest skill. `bin/wiki_install_git_hooks.py [--dry-run] [--uninstall] [--root DIR]` manages `post-commit` hooks alone. `bin/wiki_ingest.py --mode --engine --limit --dry-run` is the engine loop that `wikictl ingest` wraps.
+`bin/wiki_queue.py list|show|mark|stats|claim|release` is the deterministic queue interface used by the ingest skill. `claim` takes an advisory lock so a scheduled run and a session cannot process the same blocks — it has happened, and the result was duplicate pages. The lock is written to `wiki-state/ingest.lock` and goes stale after its TTL, so a crashed run cannot wedge the queue. `bin/wiki_install_git_hooks.py [--dry-run] [--uninstall] [--root DIR]` manages `post-commit` hooks alone. `bin/wiki_ingest.py --mode --engine --limit --dry-run` is the engine loop that `wikictl ingest` wraps.

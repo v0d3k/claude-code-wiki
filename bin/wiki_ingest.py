@@ -494,13 +494,30 @@ def main() -> int:
         log("skip: queue empty")
         return 0
 
+    from wiki_queue import read_lock
+    held = read_lock()
+    if held and not args.dry_run:
+        log(f"skip: ingest already claimed by {held.get('who')} (pid {held.get('pid')}); "
+            "another run is working the same queue")
+        return 0
+
     engine = pick_engine(cfg, args.engine)
     if engine is None:
-        log("abort: no unattended engine available (no claude credential, ollama down). "
-            "In-session ingest still works: open the project and run /wiki-ingest.")
+        log("abort: no unattended engine available. This path needs its own credential "
+            "(CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_API_KEY) or a local engine listed in "
+            "`engines`. The better route is in-session: open the project in Claude Code and "
+            "run /wiki-ingest, which uses the model you are already working with.")
         return 3
 
     log(f"start: engine={engine} mode={args.mode}")
+    lock = None
+    if not args.dry_run:
+        import os, time
+        from wiki_paths import STATE_DIR
+        lock = STATE_DIR / "ingest.lock"
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        lock.write_text(json.dumps({"who": f"unattended:{engine}", "pid": os.getpid(),
+                                    "ts": time.time(), "ttl_s": 3600}), encoding="utf-8")
     if engine == "claude":
         code = run_claude(cfg, args.mode)
         if code != 2:
@@ -510,10 +527,14 @@ def main() -> int:
         if engine is None:
             return 3
         log(f"fallback engine={engine}")
-    if args.mode == "lint":
-        log("lint is only implemented on the claude engine; nothing to do")
-        return 0
-    return run_local(cfg, engine, args.limit, args.dry_run)
+    try:
+        if args.mode == "lint":
+            log("lint is only implemented on the claude engine; nothing to do")
+            return 0
+        return run_local(cfg, engine, args.limit, args.dry_run)
+    finally:
+        if lock is not None:
+            lock.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

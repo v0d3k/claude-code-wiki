@@ -33,6 +33,17 @@ you are already working with. Two rules follow from that:
 
 ## Procedure
 
+0. **Claim the queue.** Another run — a scheduled one, or a second session — can be working the same
+   blocks; that has already produced duplicate pages once.
+   ```bash
+   python ~/.claude/skills/claude-code-wiki/bin/wiki_queue.py claim --who session
+   ```
+   If it refuses, somebody else holds it: say so and stop. Release it when you are done, including
+   when you stop early:
+   ```bash
+   python ~/.claude/skills/claude-code-wiki/bin/wiki_queue.py release
+   ```
+
 1. **Queue.**
    ```bash
    python ~/.claude/skills/claude-code-wiki/bin/wiki_queue.py list
@@ -68,7 +79,7 @@ you are already working with. Two rules follow from that:
    python ~/.claude/skills/claude-code-wiki/bin/wiki_queue.py mark --file <file> --id <id> --id <id>
    ```
 
-8. **Report.** One short paragraph: blocks consumed, pages written or updated, blocks dropped as noise. If the queue was empty, say exactly that.
+8. **Release the lock**, then **report.** One short paragraph: blocks consumed, pages written or updated, blocks dropped as noise. If the queue was empty, say exactly that.
 
 ## Weekly lint
 

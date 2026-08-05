@@ -146,6 +146,55 @@ def cmd_mark(args) -> int:
     return 0 if changed else 1
 
 
+def _lock_path() -> Path:
+    from wiki_paths import STATE_DIR
+    return STATE_DIR / "ingest.lock"
+
+
+def read_lock() -> dict | None:
+    """Current holder of the ingest lock, or None. Stale locks are ignored."""
+    import time
+    p = _lock_path()
+    if not p.exists():
+        return None
+    try:
+        info = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    # A crashed ingest must not wedge the queue forever.
+    if time.time() - float(info.get("ts", 0)) > float(info.get("ttl_s", 1800)):
+        return None
+    return info
+
+
+def cmd_claim(args) -> int:
+    """Take the ingest lock so two runs cannot process the same blocks.
+
+    Advisory on purpose: it stops the common case -- a scheduled run and a
+    session ingesting at the same time -- without being able to wedge anything,
+    because the lock expires.
+    """
+    import os, time
+    held = read_lock()
+    if held and not args.force:
+        print(f"ingest already claimed by {held.get('who')} (pid {held.get('pid')}) "
+              f"{int(time.time() - float(held.get('ts', 0)))}s ago; "
+              f"use --force to take it anyway", file=sys.stderr)
+        return 1
+    p = _lock_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({"who": args.who, "pid": os.getpid(),
+                             "ts": time.time(), "ttl_s": args.ttl}), encoding="utf-8")
+    print(f"ingest claimed by {args.who}")
+    return 0
+
+
+def cmd_release(args) -> int:
+    _lock_path().unlink(missing_ok=True)
+    print("ingest released")
+    return 0
+
+
 def cmd_stats(args) -> int:
     projects = load_projects(None)
     total_u = 0
@@ -188,6 +237,15 @@ def main() -> int:
 
     p_stats = sub.add_parser("stats")
     p_stats.set_defaults(func=cmd_stats)
+
+    p_claim = sub.add_parser("claim", help="take the ingest lock")
+    p_claim.add_argument("--who", default="session")
+    p_claim.add_argument("--ttl", type=int, default=1800, help="seconds before the lock goes stale")
+    p_claim.add_argument("--force", action="store_true")
+    p_claim.set_defaults(func=cmd_claim)
+
+    p_release = sub.add_parser("release", help="drop the ingest lock")
+    p_release.set_defaults(func=cmd_release)
 
     args = ap.parse_args()
     return args.func(args)
