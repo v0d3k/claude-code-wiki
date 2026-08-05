@@ -22,7 +22,6 @@ PKG_DIR = BIN_DIR.parent
 CONFIG_HOME = Path(os.environ.get("CLAUDE_CONFIG_DIR") or (Path.home() / ".claude"))
 STATE_DIR = CONFIG_HOME / "wiki-state"
 CONFIG_PATH = STATE_DIR / "wiki-config.json"
-LEGACY_CONFIG = STATE_DIR / "ingest-config.json"
 RUN_LOG = STATE_DIR / "ingest-runs.log"
 
 OWNER = "claude-code-wiki"  # marks the hook entries this package owns
@@ -66,13 +65,11 @@ def load_config(refresh: bool = False) -> dict:
     if _cache is not None and not refresh:
         return _cache
     cfg = json.loads(json.dumps(DEFAULTS))
-    for path in (LEGACY_CONFIG, CONFIG_PATH):  # legacy first, real config wins
-        if not path.exists():
-            continue
+    if CONFIG_PATH.exists():
         try:
-            user = json.loads(path.read_text(encoding="utf-8"))
+            user = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
-            continue
+            user = {}
         for k, v in user.items():
             if k.startswith("_"):
                 continue

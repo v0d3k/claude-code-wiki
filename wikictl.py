@@ -52,7 +52,6 @@ HOOK_SPECS = [
      {"asyncRewake": True, "rewakeSummary": "wiki queue ready to ingest"}, 20),
 ]
 OWNER_FLAG = f"--owner={OWNER}"   # written into every command we install
-OUR_SCRIPTS = {"wiki_bootstrap.py", "wiki_context.py", "wiki_record.py"}
 
 
 def out(msg: str = "") -> None:
@@ -107,13 +106,12 @@ def script_of(command: str) -> str:
 
 
 def is_ours(command: str) -> bool:
-    """Ownership is explicit. A path substring would claim other people's hooks
-    and would miss ours whenever the package is cloned under another name."""
-    c = command.replace("\\", "/")
-    if OWNER_FLAG in c:
-        return True
-    # Pre-1.0 installs had no owner flag: match the exact script names we ship.
-    return any(c.endswith(s) or f"/{s} " in c or c.endswith(f"/{s}") for s in OUR_SCRIPTS)
+    """Ownership is explicit: only entries this installer wrote are ever touched.
+
+    A path substring would both claim somebody else's hook and lose track of
+    ours as soon as the package is cloned under a different directory name.
+    """
+    return OWNER_FLAG in command.replace("\\", "/")
 
 
 def strip_hooks(data: dict) -> int:
@@ -271,25 +269,8 @@ def schedule_state() -> str:
 
 # --------------------------------------------------------------------------- commands
 
-RETIRED_ENGINES = {"fds"}   # removed in 1.1: third-party gateway, no longer shipped
-
-
-def migrate_config(cfg: dict) -> list[str]:
-    notes = []
-    engines = [e for e in cfg.get("engines", []) if e not in RETIRED_ENGINES]
-    if engines != cfg.get("engines"):
-        cfg["engines"] = engines
-        notes.append("dropped retired engine(s) from `engines`")
-    for name in RETIRED_ENGINES:
-        if cfg.pop(name, None) is not None:
-            notes.append(f"removed the `{name}` config block")
-    return notes
-
-
 def cmd_install(args) -> int:
     cfg = load_config()
-    for note in migrate_config(cfg):
-        out(f"migrate    {note}")
     if args.vault:
         cfg["vault"] = str(Path(args.vault)).replace("\\", "/")
     if args.root:
