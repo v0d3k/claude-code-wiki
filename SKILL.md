@@ -23,6 +23,9 @@ Run the command, then report what it printed in plain language. Do not re-implem
 | добавь проект | `add <path>` |
 | убери проект | `remove <slug>` |
 | найди в вики | `search "<query>"` |
+| где уже определено имя | `where <name>` |
+| сколько дублей в проекте | `dupes` |
+| пересобрать индекс символов | `symbols [--full]` |
 | снеси / удали систему | `uninstall` |
 | фоновый прогон по расписанию | `schedule install|remove|status` |
 
@@ -36,6 +39,14 @@ Useful flags: `--dry-run` on `uninstall`, `backfill` and `ingest`; `--engine cla
 - **`install` is safe to re-run** and is the fix for most `doctor` failures, including a moved package or a stale hook path.
 - **Never hand-edit** `settings.json` hooks, `.git/hooks/post-commit`, or `.wiki-raw` blocks for this system. Use the CLI so the marker contract stays intact.
 - Report honestly which model wrote the pages. In-session ingest uses the model of that session; unattended runs use whatever engine `status` shows. The per-project `log.md` records it for every pass.
+
+## The duplicate guard
+
+A `PreToolUse` hook on `Write` warns when new code declares a name that already exists in the
+repository, naming the locations. It never blocks. If the user asks why a warning appeared, or wants
+to find an existing implementation, use `where <name>`. `dupes` reports the whole picture.
+
+Never disable the guard by editing `settings.json` — set `guard_enabled: false` in the config.
 
 ## What the system is
 

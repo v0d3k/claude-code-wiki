@@ -24,6 +24,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import time
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -46,11 +47,13 @@ TASK_LINT = "LLM-Wiki Lint"
 # wiki_record uses asyncRewake: it exits 2 when the queue is worth ingesting,
 # and Claude Code then wakes the running model to do it in-session.
 HOOK_SPECS = [
-    ("SessionStart", "wiki_bootstrap.py", {"async": True}, 20),
-    ("SessionStart", "wiki_context.py", {}, 10),
-    ("Stop", "wiki_record.py",
+    ("SessionStart", None, "wiki_bootstrap.py", {"async": True}, 20),
+    ("SessionStart", None, "wiki_context.py", {}, 10),
+    ("Stop", None, "wiki_record.py",
      {"asyncRewake": True, "rewakeSummary": "wiki queue ready to ingest"}, 20),
+    ("PreToolUse", "Write", "wiki_guard.py", {}, 10),
 ]
+GUARD_EDIT_SPEC = ("PreToolUse", "Edit|MultiEdit", "wiki_guard.py", {}, 10)
 OWNER_FLAG = f"--owner={OWNER}"   # written into every command we install
 
 
@@ -91,9 +94,19 @@ def write_settings(data: dict) -> None:
     backup = SETTINGS.with_suffix(f".json.{stamp}.bak")
     if SETTINGS.exists():
         shutil.copy2(SETTINGS, backup)
+    payload = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
     tmp = SETTINGS.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    tmp.replace(SETTINGS)
+    tmp.write_text(payload, encoding="utf-8")
+    for attempt in range(5):
+        try:
+            tmp.replace(SETTINGS)
+            return
+        except PermissionError:
+            time.sleep(0.2)   # a running client or a scanner is holding the file
+    # Atomic replace lost; write in place rather than leave the install half-done.
+    # The timestamped backup above is the safety net.
+    SETTINGS.write_text(payload, encoding="utf-8")
+    tmp.unlink(missing_ok=True)
 
 
 def script_of(command: str) -> str:
@@ -133,19 +146,22 @@ def strip_hooks(data: dict) -> int:
 def install_hooks(data: dict) -> list[str]:
     strip_hooks(data)
     hooks = data.setdefault("hooks", {})
+    specs = list(HOOK_SPECS)
+    if load_config().get("guard_on_edit", False):
+        specs.append(GUARD_EDIT_SPEC)
     added = []
-    for event, script, extra, timeout in HOOK_SPECS:
+    for event, matcher, script, extra, timeout in specs:
         entry = {"type": "command",
                  "command": f'"{sys.executable}" "{(BIN / script).as_posix()}" {OWNER_FLAG}',
                  "timeout": timeout}
         entry.update(extra)
         groups = hooks.setdefault(event, [])
-        target = next((g for g in groups if "matcher" not in g), None)
+        target = next((g for g in groups if g.get("matcher") == matcher), None)
         if target is None:
-            target = {"hooks": []}
+            target = {"hooks": []} if matcher is None else {"matcher": matcher, "hooks": []}
             groups.append(target)
         target.setdefault("hooks", []).append(entry)
-        added.append(f"{event}:{script}")
+        added.append(f"{event}:{script}" + (f"[{matcher}]" if matcher else ""))
     return added
 
 
@@ -459,8 +475,9 @@ def cmd_doctor(args) -> int:
         problems.append(str(e))
     ours = [h for e, gs in data.get("hooks", {}).items() for g in gs
             for h in g.get("hooks", []) if is_ours(str(h.get("command", "")))]
-    if len(ours) != len(HOOK_SPECS):
-        problems.append(f"expected {len(HOOK_SPECS)} hooks, found {len(ours)} -- run `install`")
+    expected = len(HOOK_SPECS) + (1 if cfg.get("guard_on_edit", False) else 0)
+    if len(ours) != expected:
+        problems.append(f"expected {expected} hooks, found {len(ours)} -- run `install`")
     for h in ours:
         path = script_of(str(h.get("command", "")))
         if path and not Path(path).exists():
@@ -510,6 +527,29 @@ def cmd_ingest(args) -> int:
         cmd += ["--limit", str(args.limit)]
     if args.dry_run:
         cmd.append("--dry-run")
+    return subprocess.run(cmd).returncode
+
+
+def cmd_symbols(args) -> int:
+    cmd = [sys.executable, str(BIN / "wiki_symbols.py"), "build"]
+    if args.repo:
+        cmd.append(args.repo)
+    if args.full:
+        cmd.append("--full")
+    return subprocess.run(cmd).returncode
+
+
+def cmd_where(args) -> int:
+    cmd = [sys.executable, str(BIN / "wiki_symbols.py"), "where", args.name]
+    if args.repo:
+        cmd += ["--repo", args.repo]
+    return subprocess.run(cmd).returncode
+
+
+def cmd_dupes(args) -> int:
+    cmd = [sys.executable, str(BIN / "wiki_symbols.py"), "dupes", "--limit", str(args.limit)]
+    if args.repo:
+        cmd += ["--repo", args.repo]
     return subprocess.run(cmd).returncode
 
 
@@ -740,6 +780,21 @@ def main() -> int:
     p.add_argument("--max", type=int, default=60)
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(func=cmd_backfill)
+
+    p = sub.add_parser("symbols", help="rebuild the symbol index")
+    p.add_argument("repo", nargs="?")
+    p.add_argument("--full", action="store_true")
+    p.set_defaults(func=cmd_symbols)
+
+    p = sub.add_parser("where", help="where is this name already defined")
+    p.add_argument("name")
+    p.add_argument("--repo")
+    p.set_defaults(func=cmd_where)
+
+    p = sub.add_parser("dupes", help="names defined in more than one file")
+    p.add_argument("--repo")
+    p.add_argument("--limit", type=int, default=20)
+    p.set_defaults(func=cmd_dupes)
 
     p = sub.add_parser("add")
     p.add_argument("path")

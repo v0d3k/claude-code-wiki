@@ -14,7 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from wiki_record import (  # noqa: E402
-    MARK_BEGIN, MARK_END, is_ignored, register_project, resolve_repo, write_block, _log,
+    MARK_BEGIN, MARK_END, _log, _safe, is_ignored, register_project, resolve_repo, write_block,
 )
 
 MAX_FILES = 80
@@ -55,12 +55,14 @@ def main() -> int:
         day = datetime.now().strftime("%Y-%m-%d")
 
         files = []
+        changed_paths = []
         for line in stat.splitlines():
             parts = line.split("\t")
             if len(parts) != 3:
                 continue
             add, dele, path = parts
-            files.append(f"- `{path}` (+{add} -{dele})")
+            files.append(f"- `{_safe(path)}` (+{add} -{dele})")
+            changed_paths.append(path)
 
         out = [
             MARK_BEGIN.format(id=sha, kind="commit"), "",
@@ -79,6 +81,16 @@ def main() -> int:
 
         write_block(raw_dir / f"{day}.md", sha, "\n".join(out))
         register_project(slug, raw_dir, cwd)
+
+        # Keep the symbol index in step with the commit. Only the files this
+        # commit touched are re-parsed, so it stays in the tens of milliseconds.
+        try:
+            from wiki_symbols import build as build_symbols
+            if changed_paths:
+                build_symbols(raw_dir.parent, changed_paths)
+        except Exception as e:
+            _log(f"symbol index update skipped: {e}")
+
         _log(f"commit slug={slug} sha={sha} files={len(files)}")
         return 0
     except Exception as e:  # never break a commit

@@ -48,6 +48,10 @@ DEFAULTS = {
     "inter_call_ms": 1000,
     "block_chars": 6000,
     "max_blocks_per_run": 20,
+    # Duplicate guard: warn when new code declares a name that already exists.
+    "guard_enabled": True,
+    "guard_on_edit": False,     # Write only by default; Edit costs ~190 ms per call
+    "guard_min_existing": 1,    # warn once the name exists in this many other files
     # Keep the journal out of `git status` by adding it to .git/info/exclude
     # (local, never committed, invisible to collaborators).
     "git_exclude_raw": True,

@@ -72,6 +72,17 @@ Queues historical blocks. `--source git` (default) writes one block per calendar
 
 Idempotent: a block id already present in the journal is skipped. Nothing is ingested — run `ingest` after, and remember each block is one model call.
 
+## symbols / where / dupes
+
+```
+symbols [REPO] [--full]      # rebuild the index; incremental over the last commit unless --full
+where NAME [--repo PATH]     # every definition of NAME, with file:line
+dupes [--repo PATH] [--limit N]   # names defined in more than one file, worst first
+```
+
+The index lives at `wiki-state/symbols/<repo>.json` and is refreshed by the post-commit hook.
+`where` exits 1 when the name is unknown, and suggests similar names.
+
 ## add / remove
 
 ```
@@ -106,6 +117,9 @@ Case-insensitive substring search across every markdown file in the vault. `--li
 | `block_chars` | `6000` | block text sent to the model per call |
 | `max_blocks_per_run` | `20` | cap per ingest run |
 | `git_exclude_raw` | `true` | add `.wiki-raw/` to `.git/info/exclude` |
+| `guard_enabled` | `true` | warn when new code re-declares an existing name |
+| `guard_on_edit` | `false` | also guard `Edit`; costs ~190 ms per edit |
+| `guard_min_existing` | `1` | warn once the name exists in this many other files |
 | `auto_install_git_hooks` | `true` | let the SessionStart hook wire repos under the roots |
 | `schedule.*` | 6 h from 04:07, lint Sunday 05:07 | used at install time |
 
@@ -114,6 +128,7 @@ Case-insensitive substring search across every markdown file in the vault. `--li
 | Path | Contents |
 | --- | --- |
 | `wiki-state/wiki-config.json` | the config above |
+| `wiki-state/symbols/<repo>.json` | the symbol index behind `where` and the guard |
 | `wiki-state/<session-id>.json` | per-session transcript cursor and accumulated block |
 | `wiki-state/ingest-runs.log` | one line per scheduled run |
 | `wiki-state/ingest-last-run.txt` / `.err` | stdout and stderr of the last run |
