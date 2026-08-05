@@ -162,6 +162,41 @@ Full reference: [docs/CLI.md](docs/CLI.md). Architecture: [docs/ARCHITECTURE.md]
 
 ---
 
+## Works alongside a language server (Serena)
+
+This ships its own symbol index because a guard has to run inside a `PreToolUse` hook, in
+milliseconds, with no daemon. That constraint costs accuracy: the index knows names and
+locations, nothing else. It cannot tell you who calls a function, which of two same-named
+symbols is in scope, or what a type resolves to.
+
+[Serena](https://github.com/oraios/serena) answers exactly those questions, over a real
+language server, and the two do not overlap:
+
+| | this index | Serena |
+| --- | --- | --- |
+| Reachable from a hook or a script | yes | **no** — MCP tools only, inside a session |
+| Lookup cost | ~8 ms | language-server round trip |
+| Knows | names, `file:line` | symbols, references, scope, types |
+| "Who calls this?" | no | yes |
+| Symbol-precise edits | no | yes |
+| Can power an automatic guard | yes | no |
+
+Read it as prevention versus investigation. The index is the tripwire that fires whether or
+not anyone thought to ask; Serena is the scalpel once the model is already looking. Neither
+replaces the other: a language server cannot be queried from a git hook, and a regex index
+cannot resolve a reference.
+
+If you want both, register Serena with Claude Code and keep the guard as-is:
+
+```bash
+claude mcp add serena -s user -- serena start-mcp-server --project-from-cwd
+```
+
+**A trap worth knowing:** Claude Code reads MCP servers from `~/.claude.json`, not from
+`~/.claude/settings.json`. A `mcpServers` block in `settings.json` is Cursor's format — Claude
+Code ignores it silently, and you get zero servers while believing you have several. Check with
+`claude mcp list`.
+
 ## Configuration
 
 `<config home>/wiki-state/wiki-config.json` — config home is `$CLAUDE_CONFIG_DIR` or `~/.claude`. Any missing key falls back to its default.

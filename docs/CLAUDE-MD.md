@@ -73,6 +73,15 @@ The vault is synced. Never assume a page you wrote is already on another device;
 re-read before appending.
 ```
 
+**If Serena (or another language-server MCP) is available**, say which tool answers which
+question, so the assistant does not grep when it could resolve references:
+
+```markdown
+For "where is this defined" use `wikictl.py where <name>` — it is instant and always available.
+For "who calls this", "which overload is in scope" or a symbol-precise edit, use the Serena tools.
+The duplicate guard stays the safety net either way.
+```
+
 **If you use the unattended ingest** (`schedule install`), remember it runs with no human present. Nothing in `CLAUDE.md` reaches that run — it follows `SKILL.md` and the schema only. Keep policy that matters for unattended behaviour in `AGENTS.md`, not here.
 
 ---
