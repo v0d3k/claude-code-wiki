@@ -192,11 +192,6 @@ If you want both, register Serena with Claude Code and keep the guard as-is:
 claude mcp add serena -s user -- serena start-mcp-server --project-from-cwd
 ```
 
-**A trap worth knowing:** Claude Code reads MCP servers from `~/.claude.json`, not from
-`~/.claude/settings.json`. A `mcpServers` block in `settings.json` is Cursor's format — Claude
-Code ignores it silently, and you get zero servers while believing you have several. Check with
-`claude mcp list`.
-
 ## Configuration
 
 `<config home>/wiki-state/wiki-config.json` — config home is `$CLAUDE_CONFIG_DIR` or `~/.claude`. Any missing key falls back to its default.
