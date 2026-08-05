@@ -18,6 +18,19 @@ Schema of record: `<vault>/AGENTS.md`. It wins over this file if they ever disag
 - **Update before you create.** Search the project's existing pages first; extending a page beats adding a fifth near-duplicate.
 - **Mark everything you consumed**, including the blocks you decided were noise. An unmarked block will be re-read forever.
 
+## Run it in session, and delegate
+
+This skill is meant to run **inside a Claude Code session**, so the pages are written by the model
+you are already working with. Two rules follow from that:
+
+- **Delegate to a subagent.** Spawn one general-purpose agent and have it follow this procedure end
+  to end, then report back in a paragraph. The queue can be dozens of blocks; reading them in the
+  main thread burns the context you need for actual work. The subagent inherits the session's model.
+- **Do not shell out to `wikictl ingest` when a session is available.** That entry point exists for
+  unattended runs: it spawns a separate `claude -p` process with its own credentials, and if those
+  are missing or rate-limited it falls back to whatever local engine is configured. Same skill, worse
+  model, and no way to tell from the page afterwards except the engine name in `log.md`.
+
 ## Procedure
 
 1. **Queue.**

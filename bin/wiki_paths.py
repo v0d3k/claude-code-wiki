@@ -40,9 +40,14 @@ DEFAULTS = {
     "auto_ingest": "rewake",
     "auto_ingest_min_blocks": 3,      # do not interrupt for a single trivial block
     "auto_ingest_cooldown_min": 60,   # at most one nudge per hour
-    # Engines for unattended runs only (scheduled or CI). In-session ingest uses
+    # Engines for UNATTENDED runs only (scheduled or CI). In-session ingest uses
     # whatever model you are already running and needs none of this.
-    "engines": ["claude", "ollama"],
+    #
+    # Only `claude` by default, on purpose: a silent fall back to a small local
+    # model produces weaker pages that are indistinguishable from good ones until
+    # you read them. Add "ollama" here if you would rather have some page than
+    # none, or pass --engine ollama explicitly for a single run.
+    "engines": ["claude"],
     "claude": {"timeout_min": 30},
     "ollama": {"url": "http://127.0.0.1:11434/v1/chat/completions", "model": "llama3.1"},
     "inter_call_ms": 1000,
@@ -57,6 +62,9 @@ DEFAULTS = {
     "git_exclude_raw": True,
     # Install the post-commit hook automatically for repos under `roots`.
     "auto_install_git_hooks": True,
+    # Repository names that must never become projects -- typically a parent
+    # directory that is itself a git repo and would shadow everything under it.
+    "exclude_repos": [],
     "schedule": {"ingest_every_hours": 6, "ingest_at": "04:07",
                  "lint_weekday": "Sunday", "lint_at": "05:07"},
 }

@@ -58,7 +58,7 @@ ingest [--engine auto|claude|ollama] [--limit N] [--dry-run]
 lint   [--engine ...]
 ```
 
-Turns queued blocks into pages now. `--limit` caps blocks this run (otherwise `max_blocks_per_run`). `--dry-run` prints each verdict without writing. `lint` runs the weekly consistency pass; it is implemented on the `claude` engine only and is a no-op elsewhere.
+Turns queued blocks into pages now, in a **separate process with its own credentials**. When a session is available, prefer `/wiki-ingest` inside it: the pages are then written by the model you are working with, and the skill delegates to a subagent so the queue stays out of your context. `--limit` caps blocks this run (otherwise `max_blocks_per_run`). `--dry-run` prints each verdict without writing. `lint` runs the weekly consistency pass; it is implemented on the `claude` engine only and is a no-op elsewhere.
 
 Exit 3 means no engine was available.
 
@@ -118,7 +118,7 @@ Case-insensitive substring search across every markdown file in the vault. `--li
 | `vault` | `~/llm-wiki` | root of the curated wiki |
 | `roots` | `[]` | directories scanned for repositories |
 | `exclude` | `["node_modules", "vendor"]` | directory names skipped when scanning roots |
-| `engines` | `["claude", "ollama"]` | unattended runs only; tried in order, first reachable wins |
+| `engines` | `["claude"]` | unattended runs only; tried in order, first reachable wins. Add `"ollama"` to allow a local fallback |
 | `auto_ingest` | `"rewake"` | `rewake` wakes the running model to ingest, `notify` only mentions the count at session start, `off` does neither |
 | `auto_ingest_min_blocks` | `3` | do not interrupt for fewer blocks than this |
 | `auto_ingest_cooldown_min` | `60` | minimum minutes between nudges |
@@ -131,6 +131,7 @@ Case-insensitive substring search across every markdown file in the vault. `--li
 | `guard_enabled` | `true` | warn when new code re-declares an existing name |
 | `guard_on_edit` | `false` | also guard `Edit`; costs ~190 ms per edit |
 | `guard_min_existing` | `1` | warn once the name exists in this many other files |
+| `exclude_repos` | `[]` | repository names that must never become projects (e.g. a parent directory that is itself a repo) |
 | `auto_install_git_hooks` | `true` | let the SessionStart hook wire repos under the roots |
 | `schedule.*` | 6 h from 04:07, lint Sunday 05:07 | used at install time |
 

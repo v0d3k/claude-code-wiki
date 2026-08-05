@@ -397,6 +397,9 @@ def register_project(slug: str, raw_dir: Path, cwd: str) -> None:
     reg = VAULT / "projects.json"
     if not reg.parent.exists():
         return
+    from wiki_paths import load_config
+    if slug in set(load_config().get("exclude_repos", [])):
+        return
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     try:
         data = json.loads(reg.read_text(encoding="utf-8")) if reg.exists() else {}
@@ -472,9 +475,14 @@ def maybe_rewake(session_id: str) -> str | None:
     except OSError:
         return None
 
-    return (f"{pending} wiki blocks are waiting to be ingested. Run the /wiki-ingest skill now: "
-            "read the queue, file anything durable as pages, mark every block you consumed. "
-            "If nothing in them is durable, mark them processed and say so in one line. "
+    return (f"{pending} wiki blocks are waiting to be ingested. Do it now, with this session's "
+            "model, by delegating to a subagent: spawn one general-purpose agent and tell it to "
+            "follow the /wiki-ingest skill end to end -- read the queue, file anything durable as "
+            "pages, mark every block it consumed, and report back in a short paragraph. "
+            "Delegating keeps the queue out of your own context; the subagent inherits this "
+            "session's model, so the pages are written by it and not by a local fallback. "
+            "Do not shell out to `wikictl ingest` for this -- that path is for unattended runs and "
+            "uses a separate process with its own credentials. "
             "Set auto_ingest to \"notify\" or \"off\" in wiki-config.json to stop this.")
 
 
