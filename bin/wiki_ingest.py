@@ -4,19 +4,22 @@ Picks the best available engine and turns unprocessed `.wiki-raw` blocks into
 wiki pages. No user interaction, no credentials required beyond what is already
 running on this machine.
 
-Engine order (first reachable wins):
-  1. claude   -- `claude -p /wiki-ingest`, needs CLAUDE_CODE_OAUTH_TOKEN or the
-                 DPAPI token file. Best quality; used when available.
-  2. fds      -- FreeDeepSeek gateway on 127.0.0.1:9655 (deepseek-chat).
-  3. ollama   -- local Ollama on 127.0.0.1:11434.
+This is the UNATTENDED path -- a scheduled or CI run, with no session around.
+The normal path is in-session: the Stop hook wakes the model you are already
+working with and it runs the /wiki-ingest skill directly.
 
-Engines 2 and 3 run the deterministic loop in this file: the model only returns
+Engine order (first reachable wins):
+  1. claude   -- `claude -p /wiki-ingest`, needs CLAUDE_CODE_OAUTH_TOKEN,
+                 ANTHROPIC_API_KEY or a logged-in CLI.
+  2. ollama   -- local Ollama on 127.0.0.1:11434.
+
+The ollama path runs the deterministic loop in this file: the model only returns
 a small JSON verdict, and Python does every file write, path check, index update
 and status flip. A hallucinating model can produce a bad page; it cannot write
 outside the vault or lose a raw block.
 
 Usage:
-  python wiki_ingest.py [--engine auto|claude|fds|ollama] [--limit N] [--dry-run]
+  python wiki_ingest.py [--engine auto|claude|ollama] [--limit N] [--dry-run]
 """
 import argparse
 import json
@@ -125,7 +128,7 @@ def pick_engine(cfg: dict, want: str) -> str | None:
     for name in order:
         if name == "claude" and have_claude_token():
             return "claude"
-        if name in ("fds", "ollama"):
+        if name == "ollama":
             conf = cfg.get(name) or {}
             if conf.get("url") and endpoint_alive(conf["url"]):
                 return name
@@ -479,7 +482,7 @@ def sweep_repos() -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--engine", default="auto", choices=["auto", "claude", "fds", "ollama"])
+    ap.add_argument("--engine", default="auto", choices=["auto", "claude", "ollama"])
     ap.add_argument("--mode", default="ingest", choices=["ingest", "lint"])
     ap.add_argument("--limit", type=int)
     ap.add_argument("--dry-run", action="store_true")
@@ -493,7 +496,8 @@ def main() -> int:
 
     engine = pick_engine(cfg, args.engine)
     if engine is None:
-        log("abort: no engine available (no claude token, :9655 and :11434 both down)")
+        log("abort: no unattended engine available (no claude credential, ollama down). "
+            "In-session ingest still works: open the project and run /wiki-ingest.")
         return 3
 
     log(f"start: engine={engine} mode={args.mode}")
@@ -502,7 +506,7 @@ def main() -> int:
         if code != 2:
             return code
         # Token turned out to be missing or stale: continue down the chain.
-        engine = pick_engine(cfg, "fds") or pick_engine(cfg, "ollama")
+        engine = pick_engine(cfg, "ollama")
         if engine is None:
             return 3
         log(f"fallback engine={engine}")

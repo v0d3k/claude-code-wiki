@@ -10,7 +10,7 @@
 param(
     [ValidateSet('ingest', 'lint')]
     [string]$Mode = 'ingest',
-    [ValidateSet('auto', 'claude', 'fds', 'ollama')]
+    [ValidateSet('auto', 'claude', 'ollama')]
     [string]$Engine = 'auto',
     [int]$TimeoutMinutes = 45
 )

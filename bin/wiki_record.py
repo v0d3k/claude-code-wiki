@@ -423,6 +423,61 @@ def register_project(slug: str, raw_dir: Path, cwd: str) -> None:
     tmp.replace(reg)
 
 
+AUTO_STATE = STATE_DIR / "auto-ingest.json"
+
+
+def pending_blocks() -> int:
+    """Cheap count of unprocessed blocks across registered projects."""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from wiki_queue import collect, load_projects
+        return len(collect(load_projects(None), None))
+    except Exception:
+        return 0
+
+
+def maybe_rewake(session_id: str) -> str | None:
+    """Decide whether to hand the queue to the model that is already running.
+
+    Returning a message makes the hook exit 2, which Claude Code surfaces as a
+    wake-up: the ingest then happens in this session, with this model, with no
+    external process, no API token and no scheduler. Rate-limited so it never
+    turns into a nag.
+    """
+    from wiki_paths import load_config
+    cfg = load_config()
+    mode = cfg.get("auto_ingest", "rewake")
+    if mode != "rewake":
+        return None
+
+    now = time.time()
+    try:
+        state = json.loads(AUTO_STATE.read_text(encoding="utf-8")) if AUTO_STATE.exists() else {}
+    except (OSError, json.JSONDecodeError):
+        state = {}
+    if state.get("last_session") == session_id:
+        return None  # one nudge per session, whatever else happens
+    cooldown = float(cfg.get("auto_ingest_cooldown_min", 60)) * 60
+    if now - float(state.get("last_ts", 0)) < cooldown:
+        return None
+
+    pending = pending_blocks()
+    if pending < int(cfg.get("auto_ingest_min_blocks", 3)):
+        return None
+
+    try:
+        AUTO_STATE.parent.mkdir(parents=True, exist_ok=True)
+        AUTO_STATE.write_text(json.dumps({"last_ts": now, "last_session": session_id}),
+                              encoding="utf-8")
+    except OSError:
+        return None
+
+    return (f"{pending} wiki blocks are waiting to be ingested. Run the /wiki-ingest skill now: "
+            "read the queue, file anything durable as pages, mark every block you consumed. "
+            "If nothing in them is durable, mark them processed and say so in one line. "
+            "Set auto_ingest to \"notify\" or \"off\" in wiki-config.json to stop this.")
+
+
 def main() -> int:
     if os.environ.get("WIKI_RECORD_DISABLE") == "1":
         return 0
@@ -474,6 +529,12 @@ def main() -> int:
         register_project(slug, raw_dir, cwd)
         state_path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
         _log(f"ok slug={slug} sid={sid} files={len(state['files'])} cmds={len(state['commands'])}")
+
+        nudge = maybe_rewake(session_id)
+        if nudge:
+            print(nudge, flush=True)
+            _log(f"rewake requested: {nudge[:60]}")
+            return 2   # asyncRewake: hands the queue to the running model
         return 0
     except Exception as e:  # never break Claude Code
         _log(f"fail {type(e).__name__}: {e}")

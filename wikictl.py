@@ -4,7 +4,7 @@
     python wikictl.py doctor
     python wikictl.py install   [--vault PATH] [--root PATH]... [--replace-roots] [--no-schedule]
     python wikictl.py uninstall [--purge] [--purge-vault --confirm NAME] [--dry-run]
-    python wikictl.py ingest    [--engine auto|claude|fds|ollama] [--limit N] [--dry-run]
+    python wikictl.py ingest    [--engine auto|claude|ollama] [--limit N] [--dry-run]
     python wikictl.py lint      [--engine ...]
     python wikictl.py backfill  --project SLUG|all [--source git|sessions|both]
                                 [--since YYYY-MM-DD] [--max N] [--dry-run]
@@ -41,11 +41,15 @@ SETTINGS = CONFIG_HOME / "settings.json"
 TASK_INGEST = "LLM-Wiki Ingest"
 TASK_LINT = "LLM-Wiki Lint"
 
-# event, script, sync/async. Sync hooks can inject context; async ones cannot.
+# event, script, extra hook keys, timeout.
+# wiki_context is sync because only a sync hook can inject context.
+# wiki_record uses asyncRewake: it exits 2 when the queue is worth ingesting,
+# and Claude Code then wakes the running model to do it in-session.
 HOOK_SPECS = [
-    ("SessionStart", "wiki_bootstrap.py", True, 20),
-    ("SessionStart", "wiki_context.py", False, 10),
-    ("Stop", "wiki_record.py", True, 15),
+    ("SessionStart", "wiki_bootstrap.py", {"async": True}, 20),
+    ("SessionStart", "wiki_context.py", {}, 10),
+    ("Stop", "wiki_record.py",
+     {"asyncRewake": True, "rewakeSummary": "wiki queue ready to ingest"}, 20),
 ]
 OWNER_FLAG = f"--owner={OWNER}"   # written into every command we install
 OUR_SCRIPTS = {"wiki_bootstrap.py", "wiki_context.py", "wiki_record.py"}
@@ -132,12 +136,11 @@ def install_hooks(data: dict) -> list[str]:
     strip_hooks(data)
     hooks = data.setdefault("hooks", {})
     added = []
-    for event, script, is_async, timeout in HOOK_SPECS:
+    for event, script, extra, timeout in HOOK_SPECS:
         entry = {"type": "command",
                  "command": f'"{sys.executable}" "{(BIN / script).as_posix()}" {OWNER_FLAG}',
                  "timeout": timeout}
-        if is_async:
-            entry["async"] = True
+        entry.update(extra)
         groups = hooks.setdefault(event, [])
         target = next((g for g in groups if "matcher" not in g), None)
         if target is None:
@@ -181,6 +184,8 @@ WEEKDAYS = {"Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", 
 
 
 def schedule_install(cfg: dict) -> str:
+    if os.name != "nt":
+        return cron_install(cfg)
     s = cfg["schedule"]
     if s.get("lint_weekday") not in WEEKDAYS:
         return f"failed: schedule.lint_weekday must be one of {sorted(WEEKDAYS)}"
@@ -203,21 +208,88 @@ Register-ScheduledTask -TaskName '{TASK_LINT}' -Action $actL -Trigger $trgL -Set
 
 
 def schedule_remove() -> str:
+    if os.name != "nt":
+        return cron_remove()
     code, text = ps(f"Unregister-ScheduledTask -TaskName '{TASK_INGEST}','{TASK_LINT}' "
                     f"-Confirm:$false -ErrorAction SilentlyContinue; 'OK'")
     return "removed" if "OK" in text else f"failed: {text.strip()[:200]}"
 
 
+CRON_TAG = "# claude-code-wiki"
+
+
+def cron_line(cfg: dict) -> str:
+    s = cfg["schedule"]
+    minute = int(s["ingest_at"].split(":")[1])
+    every = int(s["ingest_every_hours"])
+    return (f"{minute} */{every} * * * {sys.executable} {(BIN / 'wiki_ingest.py')} "
+            f"--engine auto >/dev/null 2>&1  {CRON_TAG}")
+
+
+def crontab_read() -> str:
+    try:
+        r = subprocess.run(["crontab", "-l"], capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return r.stdout if r.returncode == 0 else ""
+
+
+def crontab_write(text: str) -> bool:
+    try:
+        r = subprocess.run(["crontab", "-"], input=text, capture_output=True, text=True, timeout=20)
+        return r.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def cron_install(cfg: dict) -> str:
+    kept = [ln for ln in crontab_read().splitlines() if CRON_TAG not in ln]
+    kept.append(cron_line(cfg))
+    return "installed" if crontab_write(chr(10).join(kept) + chr(10)) else "failed (is cron available?)"
+
+
+def cron_remove() -> str:
+    current = crontab_read()
+    if CRON_TAG not in current:
+        return "absent"
+    kept = [ln for ln in current.splitlines() if CRON_TAG not in ln]
+    return "removed" if crontab_write(chr(10).join(kept) + chr(10)) else "failed"
+
+
+def cron_state() -> str:
+    line = next((ln for ln in crontab_read().splitlines() if CRON_TAG in ln), None)
+    return f"cron: {line.split()[0]} {line.split()[1]}" if line else "not scheduled"
+
+
 def schedule_state() -> str:
+    if os.name != "nt":
+        return cron_state()
     code, text = ps(f"Get-ScheduledTask -TaskName '{TASK_INGEST}' -ErrorAction SilentlyContinue | "
                     f"ForEach-Object {{ $i=$_|Get-ScheduledTaskInfo; \"$($_.State) next=$($i.NextRunTime)\" }}")
-    return text.strip() or "not registered"
+    return text.strip() or "not scheduled"
 
 
 # --------------------------------------------------------------------------- commands
 
+RETIRED_ENGINES = {"fds"}   # removed in 1.1: third-party gateway, no longer shipped
+
+
+def migrate_config(cfg: dict) -> list[str]:
+    notes = []
+    engines = [e for e in cfg.get("engines", []) if e not in RETIRED_ENGINES]
+    if engines != cfg.get("engines"):
+        cfg["engines"] = engines
+        notes.append("dropped retired engine(s) from `engines`")
+    for name in RETIRED_ENGINES:
+        if cfg.pop(name, None) is not None:
+            notes.append(f"removed the `{name}` config block")
+    return notes
+
+
 def cmd_install(args) -> int:
     cfg = load_config()
+    for note in migrate_config(cfg):
+        out(f"migrate    {note}")
     if args.vault:
         cfg["vault"] = str(Path(args.vault)).replace("\\", "/")
     if args.root:
@@ -247,13 +319,15 @@ def cmd_install(args) -> int:
         register_project(repo.name, repo / RAW_DIRNAME, str(repo))
     out(f"git hooks  {len(repos)} repo(s): " + ", ".join(f"{k} x{v}" for k, v in states.items()))
 
-    if args.no_schedule:
-        out("schedule   skipped (--no-schedule)")
-    else:
+    if args.schedule:
         out(f"schedule   {schedule_install(cfg)}")
+    else:
+        mode = cfg.get("auto_ingest", "rewake")
+        out(f"ingest     in-session ({mode}); add a background run with `schedule` if you want one")
 
     out("")
-    out("Installed. New sessions record automatically; the next scheduled run ingests.")
+    out("Installed. Sessions and commits record automatically, and the model you are")
+    out("already working with folds the queue into pages when it grows.")
     out("Nothing is retroactive -- run `backfill` to seed history.")
     return 0
 
@@ -330,6 +404,17 @@ def project_rows() -> list[dict]:
     return rows
 
 
+def cmd_schedule(args) -> int:
+    cfg = load_config()
+    if args.action == "install":
+        out(f"schedule   {schedule_install(cfg)}")
+    elif args.action == "remove":
+        out(f"schedule   {schedule_remove()}")
+    out(f"state      {schedule_state()}")
+    out("note       in-session ingest is independent of this; see auto_ingest in the config")
+    return 0
+
+
 def cmd_status(args) -> int:
     cfg = load_config()
     v = Path(cfg["vault"])
@@ -341,12 +426,15 @@ def cmd_status(args) -> int:
     out(f"vault      {v}  {'ok' if v.exists() else 'MISSING'}")
     out(f"config     {CONFIG_PATH if CONFIG_PATH.exists() else '(defaults)'}")
     out(f"hooks      {', '.join(installed) if installed else 'NOT INSTALLED'}")
+    out(f"auto       {cfg.get('auto_ingest', 'rewake')} "
+        f"(>= {cfg.get('auto_ingest_min_blocks', 3)} blocks, "
+        f"{cfg.get('auto_ingest_cooldown_min', 60)} min cooldown)")
     out(f"schedule   {schedule_state()}")
 
     sys.path.insert(0, str(BIN))
     from wiki_ingest import endpoint_alive, have_claude_token
     engines = []
-    for name in cfg["engines"]:
+    for name in cfg.get("engines", []):
         if name == "claude":
             engines.append(f"claude={'ready' if have_claude_token() else 'no token'}")
         else:
@@ -355,7 +443,7 @@ def cmd_status(args) -> int:
                 engines.append(f"{name}=misconfigured (no url)")
             else:
                 engines.append(f"{name}={'up' if endpoint_alive(url, 2.0) else 'down'}")
-    out(f"engines    {', '.join(engines)}")
+    out(f"engines    {', '.join(engines)}   (unattended runs only)")
 
     rows = project_rows()
     out("")
@@ -416,8 +504,14 @@ def cmd_doctor(args) -> int:
     if stale:
         problems.append(f"{stale} block(s) unprocessed for more than 7 days -- run `ingest`")
 
-    if "not registered" in schedule_state():
-        problems.append("scheduled task missing -- run `install` (or `install --no-schedule` deliberately)")
+    mode = cfg.get("auto_ingest", "rewake")
+    if mode == "off" and "not scheduled" in schedule_state():
+        problems.append("auto_ingest is off and no background run is scheduled -- "
+                        "nothing will ever ingest; set auto_ingest or run `schedule install`")
+    if mode == "rewake":
+        rec = next((h for h in ours if "wiki_record.py" in str(h.get("command", ""))), None)
+        if rec is not None and not rec.get("asyncRewake"):
+            problems.append("auto_ingest is rewake but the Stop hook lacks asyncRewake -- run `install`")
 
     if problems:
         for p in problems:
@@ -629,7 +723,8 @@ def main() -> int:
     p.add_argument("--vault")
     p.add_argument("--root", action="append", help="repo root; repeatable, added to existing roots")
     p.add_argument("--replace-roots", action="store_true", help="replace configured roots instead of adding")
-    p.add_argument("--no-schedule", action="store_true")
+    p.add_argument("--schedule", action="store_true",
+                   help="also register a background ingest (Task Scheduler on Windows, cron elsewhere)")
     p.set_defaults(func=cmd_install)
 
     p = sub.add_parser("uninstall")
@@ -639,18 +734,22 @@ def main() -> int:
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(func=cmd_uninstall)
 
+    p = sub.add_parser("schedule")
+    p.add_argument("action", nargs="?", default="status", choices=["status", "install", "remove"])
+    p.set_defaults(func=cmd_schedule)
+
     sub.add_parser("status").set_defaults(func=cmd_status)
     sub.add_parser("doctor").set_defaults(func=cmd_doctor)
 
     p = sub.add_parser("ingest")
-    p.add_argument("--engine", default="auto", choices=["auto", "claude", "fds", "ollama"])
+    p.add_argument("--engine", default="auto", choices=["auto", "claude", "ollama"])
     p.add_argument("--limit", type=int, help="stop after N blocks")
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(func=cmd_ingest, mode="ingest")
 
     # Lint is a claude-engine-only pass; exposed so the weekly task is reachable by hand.
     p = sub.add_parser("lint")
-    p.add_argument("--engine", default="auto", choices=["auto", "claude", "fds", "ollama"])
+    p.add_argument("--engine", default="auto", choices=["auto", "claude", "ollama"])
     p.set_defaults(func=cmd_ingest, mode="lint", limit=None, dry_run=False)
 
     p = sub.add_parser("backfill")

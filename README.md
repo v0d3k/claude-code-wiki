@@ -18,7 +18,7 @@ your commits  ─┼─►  <repo>/.wiki-raw/2026-08-05.md  ─►  ingest  ─�
 
 **Records.** A `Stop` hook reads the session transcript from a per-session cursor and appends one block per session: your intent (the prompts, minus harness noise), files touched with operation counts, shell commands, subagents. A git `post-commit` hook appends one block per commit: subject, body, author, files with churn. Both write to `<repo>/.wiki-raw/YYYY-MM-DD.md`. No model, no network, ~50 ms, and the hook can never break your session — it swallows everything and exits 0.
 
-**Ingests.** A scheduled task reads the unprocessed blocks and decides what is worth keeping. Most blocks are not: restarts, reruns, typo fixes, exploration that concluded nothing. A block earns a page only when it records a decision and its reason, a diagnosis, a measured result, an architecture change, or a constraint discovered the hard way. Pages land in `projects/<slug>/wiki/{analyses,concepts,entities,sources}/`, get linked from the project catalog, and the run is logged with the engine that produced it.
+**Ingests — with the model you are already using.** When the queue is worth it, the `Stop` hook exits with a wake-up code and Claude Code hands the queue to the model running in your session. No API token, no second subscription, no background process: if you work in Claude, Claude writes the wiki. The ingest decides what is worth keeping. Most blocks are not: restarts, reruns, typo fixes, exploration that concluded nothing. A block earns a page only when it records a decision and its reason, a diagnosis, a measured result, an architecture change, or a constraint discovered the hard way. Pages land in `projects/<slug>/wiki/{analyses,concepts,entities,sources}/`, get linked from the project catalog, and the run is logged with the engine that produced it.
 
 **Injects.** A `SessionStart` hook puts the current project's catalog (not the pages — the catalog, ~1 KB) into context, along with the tail of the ingest log and a count of blocks not yet folded in. The model opens what it needs.
 
@@ -30,16 +30,18 @@ your commits  ─┼─►  <repo>/.wiki-raw/2026-08-05.md  ─►  ingest  ─�
 - Python 3.10+
 - Git
 - Claude Code
-- An ingest engine: [Ollama](https://ollama.com) running locally is enough. A Claude token is better if you have one.
+- Nothing else. The ingest runs in your session with your own model. [Ollama](https://ollama.com) is optional, and only for unattended runs.
 
 ## Install
 
-```powershell
-git clone https://github.com/v0d3k/claude-code-wiki "$env:USERPROFILE\.claude\skills\claude-code-wiki"
-python "$env:USERPROFILE\.claude\skills\claude-code-wiki\wikictl.py" install --vault "$env:USERPROFILE\llm-wiki" --root "$env:USERPROFILE\projects"
+```bash
+git clone https://github.com/v0d3k/claude-code-wiki ~/.claude/skills/claude-code-wiki
+python ~/.claude/skills/claude-code-wiki/wikictl.py install --root ~/projects
 ```
 
-`--vault` is where curated pages live (point it inside an Obsidian vault if you use one). `--root` is a directory containing your repositories; pass it more than once for several. Install is idempotent — run it again after moving the package and it repairs every path.
+That is the whole setup. `--vault` defaults to `~/llm-wiki`; point it inside an Obsidian vault if you use one. `--root` is a directory holding your repositories, repeatable.
+
+Install is idempotent — run it again after moving the package and it repairs every path.
 
 Check it:
 
@@ -48,10 +50,12 @@ python "$env:USERPROFILE\.claude\skills\claude-code-wiki\wikictl.py" status
 python "$env:USERPROFILE\.claude\skills\claude-code-wiki\wikictl.py" doctor
 ```
 
-Then open a repo in Claude Code, do some work, commit. `status` will show blocks queued. The first ingest runs on schedule, or force it:
+Then open a repo in Claude Code, do some work, commit. Once a few blocks pile up, the next time a session ends the model is asked to fold them in — you will see it run `/wiki-ingest` and report what it filed. Nothing to configure, nothing to remember.
 
-```powershell
-python "$env:USERPROFILE\.claude\skills\claude-code-wiki\wikictl.py" ingest
+Force a pass any time by saying `/wiki-ingest`, or from the shell:
+
+```bash
+python ~/.claude/skills/claude-code-wiki/wikictl.py ingest
 ```
 
 ## Seeding history
@@ -83,17 +87,24 @@ python wikictl.py ingest
 
 Full reference: [docs/CLI.md](docs/CLI.md).
 
-## Engines
+## How the ingest happens
 
-The ingest picks the first engine that answers:
+**In session, by default.** The `Stop` hook counts the queue. Past the threshold it exits with the wake-up code, and Claude Code asks the model in that session to run `/wiki-ingest`. Whatever model you work with is the model that writes your wiki. Rate-limited so it never nags: at least 3 blocks, at most one nudge an hour, never twice in the same session.
 
-| Engine | Needs | Notes |
-| --- | --- | --- |
-| `claude` | a token from `claude setup-token`, stored by `bin/wiki_set_token.ps1` | Best pages. Runs `claude -p` with `Read,Glob,Grep,Edit,Write` and no shell |
-| `ollama` | Ollama on `127.0.0.1:11434` | Default. Free, local, weaker prose |
-| `fds` | a local FreeDeepSeek gateway | **Opt-in.** Forwards block content to a third-party service — not in the default engine list |
+```json
+"auto_ingest": "rewake",           // "notify" = only mention it at session start, "off" = neither
+"auto_ingest_min_blocks": 3,
+"auto_ingest_cooldown_min": 60
+```
 
-On the local engines the model never touches your filesystem. It returns one small JSON verdict — `skip` with a reason, or `write` with section, slug, title, summary and body — and Python does every write, path check, index edit and status flip. A hallucinating local model can produce a weak page; it cannot escape the vault or lose a block.
+**Unattended, if you want it.** `wikictl schedule install` adds a background run — Task Scheduler on Windows, cron everywhere else. That path needs an engine of its own, since no session is around:
+
+| Engine | Needs |
+| --- | --- |
+| `claude` | `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`, or a logged-in CLI (`claude setup-token`, then `bin/wiki_set_token.ps1` on Windows) |
+| `ollama` | Ollama on `127.0.0.1:11434` |
+
+On the `ollama` path the model never touches your filesystem: it returns one small JSON verdict — `skip` with a reason, or `write` with section, slug, title, summary and body — and Python does every write, path check, index edit and status flip. A hallucinating local model can produce a weak page; it cannot escape the vault or lose a block.
 
 ## What it puts on your machine
 
@@ -105,7 +116,7 @@ On the local engines the model never touches your filesystem. It returns one sma
 | `<repo>/.git/info/exclude` | `.wiki-raw/` added here, so the journal never shows in `git status` and is never committed |
 | `~/.claude/settings.json` | three hook entries, each tagged `--owner=claude-code-wiki` |
 | `~/.claude/wiki-state/` | config, per-session cursors, run logs, the optional token |
-| Task Scheduler | `LLM-Wiki Ingest` (every 6 h, catches up on missed runs) and `LLM-Wiki Lint` (weekly) |
+| Task Scheduler / crontab | only if you run `schedule install` |
 
 `uninstall` reverses all of it and leaves the notes. `settings.json` is backed up with a timestamp on every install.
 
@@ -121,17 +132,13 @@ The journal contains your prompts and shell commands verbatim, and the ingest fe
 
 Details and the full threat model: [docs/SECURITY.md](docs/SECURITY.md).
 
-## Non-Windows
+## Platforms
 
-The hooks (`wiki_record.py`, `wiki_commit.py`, `wiki_bootstrap.py`, `wiki_context.py`) and the ingest are plain Python and work anywhere. What is Windows-only: the scheduled tasks (`install` registers them through PowerShell) and the DPAPI token store. On macOS or Linux use `install --no-schedule` and drive the ingest from cron:
-
-```
-7 */6 * * * python ~/.claude/skills/claude-code-wiki/bin/wiki_ingest.py --engine auto
-```
+Everything the default path needs — the hooks, the queue, the in-session ingest — is plain Python and works on Windows, macOS and Linux. `wikictl schedule` picks Task Scheduler or cron for you. The only Windows-specific piece is the DPAPI token store, and it matters solely for unattended runs on the `claude` engine; elsewhere export `CLAUDE_CODE_OAUTH_TOKEN` in the cron environment instead.
 
 ## Known limits
 
-- Page quality tracks the engine. On a small local model, pages are correct but plain, and can over-explain; the per-project `log.md` records which engine wrote each run.
+- Page quality tracks whichever model ran. The per-project `log.md` records it for every pass.
 - `lint` is only implemented on the `claude` engine.
 - A project directory is scaffolded on its first written page, so a repo where nothing durable has happened stays absent from the vault by design.
 - Local models sometimes break the JSON contract. One repair retry at temperature 0 is built in; if that fails too the block stays queued for the next run.

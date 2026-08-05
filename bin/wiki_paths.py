@@ -34,12 +34,18 @@ DEFAULTS = {
     # add explicitly" -- `install` fills this from --root.
     "roots": [],
     "exclude": ["node_modules", "vendor"],
-    # First reachable engine wins. `fds` is opt-in on purpose: it forwards block
-    # content to a third-party gateway, unlike claude and ollama.
+    # How the queue gets turned into pages.
+    #   "rewake" -- the model you are already working with does it, in session
+    #   "notify" -- only mention the pending count at session start
+    #   "off"    -- never nudge; use `wikictl ingest` or a scheduled run
+    "auto_ingest": "rewake",
+    "auto_ingest_min_blocks": 3,      # do not interrupt for a single trivial block
+    "auto_ingest_cooldown_min": 60,   # at most one nudge per hour
+    # Engines for unattended runs only (scheduled or CI). In-session ingest uses
+    # whatever model you are already running and needs none of this.
     "engines": ["claude", "ollama"],
     "claude": {"timeout_min": 30},
     "ollama": {"url": "http://127.0.0.1:11434/v1/chat/completions", "model": "llama3.1"},
-    "fds": {"url": "http://127.0.0.1:9655/v1/chat/completions", "model": "deepseek-chat"},
     "inter_call_ms": 1000,
     "block_chars": 6000,
     "max_blocks_per_run": 20,

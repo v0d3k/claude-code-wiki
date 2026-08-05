@@ -36,7 +36,7 @@ This system reads your prompts and commit messages, writes files into your repos
 ## Residual risk
 
 - A hostile commit message still controls the *content* of a page the local engine may write, and therefore one line in the project catalog. It cannot execute code or write outside the vault, but it can put misleading prose in front of future sessions. Review `log.md` when ingesting an unfamiliar repository's history.
-- The `fds` engine forwards journal content to a third-party gateway. It is not in the default engine list; enabling it is a disclosure decision.
+- In-session ingest sends block content to whatever model you are already using; an unattended run sends it to the configured engine. Either way the journal leaves the machine only if your model does.
 - The journal is only as private as the machine. It is not encrypted at rest.
 - The DPAPI token store is bound to the Windows account, which is the right scope, but anything running as you can read it.
 

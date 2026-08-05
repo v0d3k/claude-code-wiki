@@ -52,9 +52,15 @@ Layer 1 is written by hooks with no model involved: fast, offline, and unable to
 
 Failure isolation is per block: an engine error, an unparseable verdict or an `OSError` on write leaves that one block queued and the batch continues.
 
-## Engine selection
+## Who runs the ingest
 
-`claude` → `ollama` → (`fds`, opt-in). `claude` requires a token on disk; the others require their endpoint to answer. The runner checks the queue before starting anything, so an empty queue costs nothing. If the `claude` engine starts but reports `Not logged in`, the run falls back down the chain instead of failing.
+Default is in-session. The `Stop` hook counts the queue and, past the threshold, exits 2 with a message; Claude Code treats that as a wake-up and the model already in the session runs `/wiki-ingest`. No token, no daemon, no second model, and it works identically on every platform. Guards: at least `auto_ingest_min_blocks` blocks, one nudge per session, `auto_ingest_cooldown_min` between nudges, and the state lives in `wiki-state/auto-ingest.json`.
+
+An ingest run edits only the vault, and the recorder ignores sessions whose cwd is inside the vault, so the wake-up cannot feed itself.
+
+## Engine selection (unattended runs only)
+
+Unattended runs try `claude` then `ollama`. `claude` requires a credential in the environment; `ollama` requires its endpoint to answer. The runner checks the queue before starting anything, so an empty queue costs nothing. If the `claude` engine starts but reports `Not logged in`, the run falls back down the chain instead of failing.
 
 ## Why the recorder cannot loop
 

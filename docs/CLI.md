@@ -5,17 +5,17 @@ All commands are `python wikictl.py <command>`. Exit code is 0 unless stated.
 ## install
 
 ```
-install [--vault PATH] [--root PATH ...] [--replace-roots] [--no-schedule]
+install [--vault PATH] [--root PATH ...] [--replace-roots] [--schedule]
 ```
 
-Writes the config, scaffolds the vault, installs the three Claude Code hooks, installs `post-commit` in every repository under the configured roots, and registers the scheduled tasks. Idempotent, and the repair command for almost everything — run it again after moving the package and every path is rewritten.
+Writes the config, scaffolds the vault, installs the three Claude Code hooks and `post-commit` in every repository under the configured roots, and migrates a config written by an older version. Ingest is in-session by default, so no background job is registered unless you ask for one. Idempotent, and the repair command for almost everything — run it again after moving the package and every path is rewritten.
 
 | Flag | Default | Effect |
 | --- | --- | --- |
 | `--vault PATH` | `~/llm-wiki` | where curated pages live |
 | `--root PATH` | none | a directory containing repositories; repeatable. **Added** to the configured roots |
 | `--replace-roots` | off | replace the configured roots instead of adding to them |
-| `--no-schedule` | off | skip Task Scheduler registration (use on non-Windows, or drive ingest from cron) |
+| `--schedule` | off | also register a background ingest (Task Scheduler on Windows, cron elsewhere) |
 
 Existing vault files are never overwritten. `settings.json` is copied to `settings.json.<timestamp>.bak` before every write. With no roots configured, it says so and wires nothing — use `add` per repository.
 
@@ -25,7 +25,7 @@ Existing vault files are never overwritten. `settings.json` is copied to `settin
 uninstall [--purge] [--purge-vault --confirm NAME] [--dry-run]
 ```
 
-Removes the hook entries, the `post-commit` blocks and the scheduled tasks. **Your notes are kept.**
+Removes the hook entries, the `post-commit` blocks and any background schedule. **Your notes are kept.**
 
 | Flag | Effect |
 | --- | --- |
@@ -37,16 +37,24 @@ Removes the hook entries, the `post-commit` blocks and the scheduled tasks. **Yo
 
 ## status
 
-Prints the vault path and whether it exists, the config file in use, the installed hooks, the scheduled task state and next run, engine availability, then one row per registered project with its page count, queued blocks and repository, and the last line of the run log.
+Prints the vault path and whether it exists, the config file in use, the installed hooks, how automatic ingest is wired (mode, threshold, cooldown), any background schedule, engine availability for unattended runs, then one row per registered project with its page count, queued blocks and repository, and the last line of the run log.
 
 ## doctor
 
-Verifies: vault present and complete; `settings.json` parses; the expected number of hooks is installed and each points at a file that exists; every repository under the roots has the `post-commit` hook; no non-history block has been unprocessed for over 7 days; the scheduled task exists. Prints `FAIL <problem> -- <fix>` per finding, or `all checks passed`. Exit 1 when anything failed.
+Verifies: vault present and complete; `settings.json` parses; the expected number of hooks is installed and each points at a file that exists; every repository under the roots has the `post-commit` hook; no non-history block has been unprocessed for over 7 days; the Stop hook carries `asyncRewake` when `auto_ingest` is `rewake`; and something is able to ingest at all. Prints `FAIL <problem> -- <fix>` per finding, or `all checks passed`. Exit 1 when anything failed.
+
+## schedule
+
+```
+schedule [status|install|remove]
+```
+
+Manages the optional background run: Task Scheduler on Windows, a `crontab` line tagged `# claude-code-wiki` elsewhere. Independent of in-session ingest — most people need neither this nor a token.
 
 ## ingest / lint
 
 ```
-ingest [--engine auto|claude|fds|ollama] [--limit N] [--dry-run]
+ingest [--engine auto|claude|ollama] [--limit N] [--dry-run]
 lint   [--engine ...]
 ```
 
@@ -88,10 +96,12 @@ Case-insensitive substring search across every markdown file in the vault. `--li
 | `vault` | `~/llm-wiki` | root of the curated wiki |
 | `roots` | `[]` | directories scanned for repositories |
 | `exclude` | `["node_modules", "vendor"]` | directory names skipped when scanning roots |
-| `engines` | `["claude", "ollama"]` | tried in order, first reachable wins |
+| `engines` | `["claude", "ollama"]` | unattended runs only; tried in order, first reachable wins |
+| `auto_ingest` | `"rewake"` | `rewake` wakes the running model to ingest, `notify` only mentions the count at session start, `off` does neither |
+| `auto_ingest_min_blocks` | `3` | do not interrupt for fewer blocks than this |
+| `auto_ingest_cooldown_min` | `60` | minimum minutes between nudges |
 | `claude.timeout_min` | `30` | kill the headless run after this long |
 | `ollama.url` / `ollama.model` | `http://127.0.0.1:11434/v1/chat/completions`, `llama3.1` | local engine |
-| `fds.url` / `fds.model` | `http://127.0.0.1:9655/…`, `deepseek-chat` | third-party gateway; add `"fds"` to `engines` to enable |
 | `inter_call_ms` | `1000` | pause between model calls |
 | `block_chars` | `6000` | block text sent to the model per call |
 | `max_blocks_per_run` | `20` | cap per ingest run |
@@ -113,7 +123,7 @@ Case-insensitive substring search across every markdown file in the vault. `--li
 ## PowerShell entry points
 
 ```
-bin/wiki-ingest-run.ps1 [-Mode ingest|lint] [-Engine auto|claude|fds|ollama] [-TimeoutMinutes 45]
+bin/wiki-ingest-run.ps1 [-Mode ingest|lint] [-Engine auto|claude|ollama] [-TimeoutMinutes 45]
 bin/wiki_set_token.ps1
 ```
 

@@ -24,8 +24,9 @@ Run the command, then report what it printed in plain language. Do not re-implem
 | убери проект | `remove <slug>` |
 | найди в вики | `search "<query>"` |
 | снеси / удали систему | `uninstall` |
+| фоновый прогон по расписанию | `schedule install|remove|status` |
 
-Useful flags: `--dry-run` on `uninstall`, `backfill` and `ingest`; `--engine claude|fds|ollama` on `ingest`; `--vault PATH` and `--root PATH` on `install` (`--root` adds to the configured roots, `--replace-roots` overwrites them); `--limit N` on `search` (default 40).
+Useful flags: `--dry-run` on `uninstall`, `backfill` and `ingest`; `--engine claude|ollama` on `ingest`; `--vault PATH` and `--root PATH` on `install` (`--root` adds to the configured roots, `--replace-roots` overwrites them); `--limit N` on `search` (default 40).
 
 ## Rules
 
@@ -34,7 +35,7 @@ Useful flags: `--dry-run` on `uninstall`, `backfill` and `ingest`; `--engine cla
 - **`backfill` is not free.** Every queued block becomes one model call at ingest time. Estimate first: `--dry-run` prints the block count. Anything above ~50 blocks, tell the user the number and let them narrow `--since` or `--max` before running the ingest.
 - **`install` is safe to re-run** and is the fix for most `doctor` failures, including a moved package or a stale hook path.
 - **Never hand-edit** `settings.json` hooks, `.git/hooks/post-commit`, or `.wiki-raw` blocks for this system. Use the CLI so the marker contract stays intact.
-- Report engine honestly: pages written by `ollama` or `fds` are weaker than `claude` ones, and `status` shows which engines are available. The per-project `log.md` records the engine for every run.
+- Report honestly which model wrote the pages. In-session ingest uses the model of that session; unattended runs use whatever engine `status` shows. The per-project `log.md` records it for every pass.
 
 ## What the system is
 
@@ -45,7 +46,7 @@ Four layers, described fully in `<vault>/AGENTS.md`:
 3. `<vault>/wiki/` — shared, cross-project pages and automation reports.
 4. `<vault>/AGENTS.md` — the schema every agent follows inside the vault.
 
-A `SessionStart` hook injects the current project's catalog into context, so an agent knows what already exists before re-deriving it. A scheduled task ingests every 6 hours, picking the first available engine: `claude -p` (needs a token), FreeDeepSeek `:9655`, or Ollama `:11434`.
+A `SessionStart` hook injects the current project's catalog into context, so an agent knows what already exists before re-deriving it. The `Stop` hook wakes the running model once the queue passes `auto_ingest_min_blocks` — that is why you may be asked to run `/wiki-ingest` at the end of a session. A background run is optional: `schedule install` (Task Scheduler or cron).
 
 ## Files
 
