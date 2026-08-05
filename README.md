@@ -27,14 +27,15 @@ These are numbers from one real repository — 1231 commits, 4400 files — not 
 **Code duplicates.** In the same repository:
 
 ```
-458 names defined in more than one file
-1424 redundant definitions
-num          43 definitions, 11 different implementations
+IDENTICAL  109 names   same name, same body -- consolidate mechanically
+DIVERGED   337 names   same name, different bodies -- one name, several behaviours
+RENAMED     66 groups  same body under different names -- invisible to any name check
+
+num          43 definitions, 13 different implementations
 tableExists  20 definitions, 12 different implementations
-escHtml      27 definitions
 ```
 
-Eleven implementations of `num` is not a style problem. Three of them disagree about the empty string: one returns `0`, another returns `null`. Half the `tableExists` copies swallow a database error and return `false`, so "table missing" and "database unreachable" become indistinguishable. That is where the quiet bugs live.
+Thirteen implementations of `num` is not a style problem. Three of them disagree about the empty string: one returns `0`, another returns `null`. Half the `tableExists` copies swallow a database error and return `false`, so "table missing" and "database unreachable" become indistinguishable. That is where the quiet bugs live.
 
 Both problems have the same shape: **the information exists, and nothing puts it in front of the model at the moment of the decision.**
 
@@ -48,16 +49,26 @@ Both problems have the same shape: **the information exists, and nothing puts it
 
 **Injects the catalog, not the pages.** A `SessionStart` hook puts the project's table of contents (~1 KB) into context along with the tail of the ingest log. The model opens what it needs instead of carrying 200 KB it mostly does not.
 
-**Guards against duplicates.** A symbol index stays in step with every commit. When new code declares a name that already exists, a `PreToolUse` hook says so — with locations — before the file is written:
+**Guards against duplicates.** A symbol index stays in step with every commit, holding both the
+name and a hash of the normalised body of every definition. That second half matters, because
+duplication comes in three kinds that need three different answers:
+
+| | What the guard says |
+| --- | --- |
+| **identical** — same body already here | "identical body already here (8 places) … Import it." |
+| **renamed** — same body, new name | "this exact body already exists as `esc`, `escHtml` in 12 places" |
+| **diverged** — name taken, different behaviour | "name taken in 20 files with 12 different implementations" |
+
+The renamed case is the one no name-based check can see. Measured on one repository: 66 groups
+of bodies living under several names, including a single `escHtml` body spread across `esc`,
+`escapeHtml` and `escHtmlLite`, and one `num` body also called `finiteOrNull`, `finiteNumber`
+and `finite`. Writing `renderSafeText` with a body that already exists as `esc` is caught before
+the file lands:
 
 ```
-Duplicate check for `src/analytics/newReport.js`: this file declares names that
-already exist in this repository.
-
-- `num` already defined in 43 file(s): index.js, scripts/funding-harvester-run.cjs …
-- `tableExists` already defined in 20 file(s): src/analytics/advisorOutcomeCanonicalR.js …
-
-Import the existing one, or keep yours and be deliberate about it.
+- `renderSafeText` — this exact body already exists as `esc`, `escHtml`,
+  `escapeLiveAutoBeAlertHtml` in 12 place(s): src/analytics/operatorDailyReportTelegramHtml.js,
+  src/delivery/algoTelegramHub.js and 9 more.
 ```
 
 It warns and never blocks. A same-named local helper is sometimes correct, and a hook cannot tell.
@@ -136,7 +147,7 @@ The vault is plain markdown with relative links — it renders as a graph in Obs
 | `ingest [--engine E] [--limit N] [--dry-run]` | turn queued blocks into pages now |
 | `backfill --project SLUG\|all [--source S] [--since D]` | queue historical blocks from git or past transcripts |
 | `where NAME` | every definition of a name, with `file:line` |
-| `dupes [--limit N]` | names defined in more than one file, worst first |
+| `dupes [--kind identical\|diverged\|renamed]` | duplication split by kind, worst first |
 | `symbols [--full]` | rebuild the symbol index |
 | `search "QUERY"` | grep the vault |
 | `schedule [install\|remove\|status]` | optional background ingest: Task Scheduler or cron |
@@ -156,7 +167,7 @@ Full reference: [docs/CLI.md](docs/CLI.md). Architecture: [docs/ARCHITECTURE.md]
 
 **The index is regex-based on purpose.** A language server knows more, but it needs a daemon and a warm-up and cannot be queried from a git hook. This has to answer during a `PreToolUse` call. Full build of 4400 files: ~2 s. Incremental update after a commit: only the files in that commit. JavaScript, TypeScript and Python are recognised.
 
-**Latency is measured, not assumed.** The guard costs 188 ms per `Write`, of which 180 ms is Python interpreter start and ~8 ms is the actual lookup. On `Write` that is a handful of calls per session. On `Edit` it would be every edit, which is why `guard_on_edit` defaults to off.
+**Latency is measured, not assumed.** The guard costs ~226 ms per `Write` on Windows, of which 182 ms is Python interpreter start; the index work is the rest. Resolving the repository by walking up for `.git` rather than spawning `git rev-parse` saved 30 ms of that. On `Write` this is a handful of calls per session. On `Edit` it would be every edit, which is why `guard_on_edit` defaults to off.
 
 **The ingest cannot feed itself.** It writes into the vault, and the recorder ignores any session whose working directory is inside the vault or the Claude config home. Without that, every ingest would produce a block describing the ingest.
 
@@ -240,7 +251,7 @@ The journal holds your prompts and shell commands verbatim, and the ingest shows
 - **It is not a code map.** It records decisions and findings. "Where is the function that does X" is answered by `where`, not by the pages.
 - **Page quality tracks whichever model ran.** A small local model stays factual about what changed but can over-explain why. The per-project `log.md` names the model for every pass, so weak pages are attributable.
 - **A project appears in the vault only when its first page is written.** A repository where nothing durable has happened stays absent by design.
-- **The guard sees names, not semantics.** It will tell you `num` exists in 43 files; it will not tell you those 43 disagree. `dupes` shows the surface; comparing bodies is a separate pass.
+- **The guard compares bodies textually, not semantically.** Two functions that do the same thing with different code read as different. Normalisation strips comments and whitespace only; renaming a parameter is enough to hide a copy. `dupes --kind renamed` shows what it does catch.
 - **`lint` is implemented on the `claude` engine only.**
 - Requires Python 3.10+, Git and Claude Code. Scheduling and the DPAPI token store are the only Windows-specific parts; everything on the default path is cross-platform.
 

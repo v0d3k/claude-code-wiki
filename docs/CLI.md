@@ -76,11 +76,22 @@ Idempotent: a block id already present in the journal is skipped. Nothing is ing
 
 ```
 symbols [REPO] [--full]      # rebuild the index; incremental over the last commit unless --full
-where NAME [--repo PATH]     # every definition of NAME, with file:line
-dupes [--repo PATH] [--limit N]   # names defined in more than one file, worst first
+where NAME [--repo PATH]     # every definition of NAME, grouped by body, with aliases
+dupes [--kind all|identical|diverged|renamed] [--limit N]
 ```
 
-The index lives at `wiki-state/symbols/<repo>.json` and is refreshed by the post-commit hook.
+The index holds, per definition, the location and a hash of the normalised body (comments and
+whitespace stripped, bodies under 40 characters ignored as boilerplate). That is what lets `where`
+group definitions into variants and report that the same body also goes by other names, and what
+lets `dupes` separate three different problems:
+
+- `identical` — same name, same body. Mechanical: consolidate and import.
+- `diverged` — same name, different bodies. A name collision; the source of bugs where one module's
+  `num('')` is `0` and the next one's is `null`.
+- `renamed` — same body under different names. Invisible to any name-based check.
+
+The index lives at `wiki-state/symbols/<repo>.json` and is refreshed by the post-commit hook, which
+re-parses only the files in that commit. A format change triggers a full rebuild automatically.
 `where` exits 1 when the name is unknown, and suggests similar names.
 
 ## add / remove

@@ -24,7 +24,7 @@ Run the command, then report what it printed in plain language. Do not re-implem
 | убери проект | `remove <slug>` |
 | найди в вики | `search "<query>"` |
 | где уже определено имя | `where <name>` |
-| сколько дублей в проекте | `dupes` |
+| сколько дублей в проекте | `dupes [--kind identical\|diverged\|renamed]` |
 | пересобрать индекс символов | `symbols [--full]` |
 | снеси / удали систему | `uninstall` |
 | фоновый прогон по расписанию | `schedule install|remove|status` |
@@ -42,9 +42,14 @@ Useful flags: `--dry-run` on `uninstall`, `backfill` and `ingest`; `--engine cla
 
 ## The duplicate guard
 
-A `PreToolUse` hook on `Write` warns when new code declares a name that already exists in the
-repository, naming the locations. It never blocks. If the user asks why a warning appeared, or wants
-to find an existing implementation, use `where <name>`. `dupes` reports the whole picture.
+A `PreToolUse` hook on `Write` compares what the new code declares against the symbol index, by
+name and by body hash, and reports one of three things: the identical body is already here, the same
+body exists under another name, or the name is taken by different behaviour. It never blocks.
+
+Treat them differently. Identical means import the existing one. Same body under another name means
+the helper exists and a fork is about to appear — say so before writing. A taken name with different
+behaviour is a collision: pick another name, or reconcile the two implementations deliberately.
+`where <name>` shows every definition grouped by body; `dupes` reports the whole picture.
 
 Never disable the guard by editing `settings.json` — set `guard_enabled: false` in the config.
 

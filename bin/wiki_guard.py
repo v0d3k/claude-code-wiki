@@ -18,43 +18,83 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from wiki_paths import load_config  # noqa: E402
 from wiki_record import _log, _read_event, is_ignored  # noqa: E402
-from wiki_symbols import PATTERNS, declared_names, load_index, repo_root  # noqa: E402
+from wiki_symbols import PATTERNS, declared, declared_names, load_index, repo_root  # noqa: E402
 
 MAX_REPORTED = 5      # names per warning
 MAX_LOCATIONS = 3     # locations per name
 
 
+def _locations(entries, exclude_file: str) -> list[str]:
+    return [e["loc"] for e in entries if e["loc"].rsplit(":", 1)[0] != exclude_file]
+
+
+def _brief(locs: list[str]) -> str:
+    files = sorted({loc.rsplit(":", 1)[0] for loc in locs})
+    shown = ", ".join(files[:MAX_LOCATIONS])
+    more = f" and {len(files) - MAX_LOCATIONS} more" if len(files) > MAX_LOCATIONS else ""
+    return f"{shown}{more}"
+
+
 def check(text: str, suffix: str, root: Path, exclude_file: str) -> list[str]:
-    """Return one report line per name that already exists elsewhere."""
+    """One line per finding, strongest signal first.
+
+    Three different problems, three different answers:
+      identical  the same body is already here -- import it
+      renamed    the same body is here under another name -- the invisible case
+      diverged   the name is taken by different behaviour -- a collision
+    """
     if not text or suffix not in PATTERNS:
         return []
     idx = load_index(root)
-    if not idx:
+    defs = idx.get("defs", {})
+    if not defs:
         return []
-    cfg = load_config()
-    threshold = int(cfg.get("guard_min_existing", 1))
+    dup_bodies = idx.get("dup_bodies", {})
+    threshold = int(load_config().get("guard_min_existing", 1))
 
-    lines = []
-    for name in sorted(declared_names(text, suffix)):
-        locs = [loc for loc in idx.get(name, [])
-                if loc.rsplit(":", 1)[0] != exclude_file]
-        files = {loc.rsplit(":", 1)[0] for loc in locs}
-        if len(files) < threshold:
+    identical, renamed, diverged = [], [], []
+    for name, h in declared(text, suffix):
+        entries = defs.get(name, [])
+        locs = _locations(entries, exclude_file)
+        same_body = [e["loc"] for e in entries
+                     if h and e.get("h") == h and e["loc"].rsplit(":", 1)[0] != exclude_file]
+
+        if same_body:
+            identical.append(
+                f"- `{name}` — **identical body already here** ({len(same_body)} place(s)): "
+                f"{_brief(same_body)}. Import it.")
             continue
-        shown = ", ".join(sorted(files)[:MAX_LOCATIONS])
-        more = f" and {len(files) - MAX_LOCATIONS} more file(s)" if len(files) > MAX_LOCATIONS else ""
-        lines.append(f"- `{name}` already defined in {len(files)} file(s): {shown}{more}")
-    lines.sort(key=lambda s: -int(s.split("already defined in ")[1].split(" ")[0]))
-    return lines[:MAX_REPORTED]
+
+        if h:
+            elsewhere = [r for r in dup_bodies.get(h, [])
+                         if not r.startswith(f"{name}@")
+                         and r.split("@", 1)[1].rsplit(":", 1)[0] != exclude_file]
+            if elsewhere:
+                aliases = sorted({r.split("@", 1)[0] for r in elsewhere})
+                renamed.append(
+                    f"- `{name}` — **this exact body already exists** as "
+                    f"{', '.join('`' + a + '`' for a in aliases[:3])} in {len(elsewhere)} place(s): "
+                    f"{_brief([r.split('@', 1)[1] for r in elsewhere])}.")
+                continue
+
+        files = {loc.rsplit(":", 1)[0] for loc in locs}
+        if len(files) >= threshold:
+            variants = len({e.get("h") for e in entries if e.get("h")})
+            what = (f"{variants} different implementations" if variants > 1
+                    else "a different implementation")
+            diverged.append(
+                f"- `{name}` — name taken in {len(files)} file(s) with {what}: {_brief(locs)}.")
+
+    return (identical + renamed + diverged)[:MAX_REPORTED]
 
 
 def emit(event_name: str, report: list[str], target: str) -> None:
     body = (
-        f"Duplicate check for `{target}`: this file declares names that already exist "
-        f"in this repository.\n\n" + "\n".join(report) + "\n\n"
-        "Import the existing one, or keep yours and be deliberate about it — a local "
-        "helper with the same name is sometimes correct, a third copy of the same "
-        "logic usually is not. `wikictl where <name>` lists every definition."
+        f"Duplicate check for `{target}`:\n\n" + "\n".join(report) + "\n\n"
+        "An identical body means import it. The same body under another name means the "
+        "helper already exists and you are about to fork it. A taken name with different "
+        "behaviour is a collision — pick another name or reconcile the two. "
+        "`wikictl where <name>` shows every definition and which of them are the same code."
     )
     out = {"hookSpecificOutput": {"hookEventName": event_name, "additionalContext": body}}
     if event_name == "PreToolUse":
@@ -79,15 +119,18 @@ def main() -> int:
         if not isinstance(inp, dict):
             return 0
 
-        cwd = str(event.get("cwd") or os.getcwd())
-        if is_ignored(cwd):
-            return 0
-        root = repo_root(cwd)
-        if root is None:
-            return 0
-
         file_path = str(inp.get("file_path") or "")
         if not file_path:
+            return 0
+
+        # Resolve the repository from the file being written, not from the
+        # session's cwd: editing another project from inside this one must not
+        # be checked against this project's index.
+        target = Path(file_path)
+        root = repo_root(str(target.parent if target.parent.exists() else Path.cwd()))
+        if root is None:
+            return 0
+        if is_ignored(str(root)):
             return 0
         suffix = Path(file_path).suffix
         try:
