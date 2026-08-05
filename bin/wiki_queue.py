@@ -28,7 +28,20 @@ BEGIN_RE = re.compile(
     r"<!--\s*wiki-raw:begin\s+id=(?P<id>[A-Za-z0-9][A-Za-z0-9._-]{1,63})"
     r"\s+kind=(?P<kind>[a-z-]{1,32})\s+status=(?P<status>[a-z]+)(?P<rest>[^>]*)-->"
 )
-SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+# A slug becomes a directory name. Reject what breaks paths -- not what is
+# simply not ASCII: repositories are legitimately named in any language.
+BAD_SLUG_CHARS = set('/\:*?"<>|')
+
+
+def slug_ok(slug: str) -> bool:
+    return (
+        bool(slug)
+        and len(slug) <= 64
+        and slug not in (".", "..")
+        and not slug.startswith(("-", "."))
+        and not (BAD_SLUG_CHARS & set(slug))
+        and all(ch >= " " for ch in slug)
+    )
 
 
 def load_projects(only: str | None) -> dict:
@@ -43,7 +56,7 @@ def load_projects(only: str | None) -> dict:
             continue
         if not meta.get("active", True):
             continue
-        if not SLUG_RE.match(slug):  # a slug becomes a path; keep it boring
+        if not slug_ok(slug):
             print(f"skipping project with unusable name: {slug!r}", file=sys.stderr)
             continue
         out[slug] = meta

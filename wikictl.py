@@ -334,7 +334,7 @@ def cmd_status(args) -> int:
     cfg = load_config()
     v = Path(cfg["vault"])
     data = read_settings()
-    installed = [f"{e}:{h['command'].split('/')[-1]}"
+    installed = [f"{e}:{Path(script_of(str(h.get('command', '')))).name or '?'}"
                  for e, gs in data.get("hooks", {}).items()
                  for g in gs for h in g.get("hooks", []) if is_ours(str(h.get("command", "")))]
 
