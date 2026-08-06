@@ -67,8 +67,8 @@ the file lands:
 
 ```
 - `renderSafeText` — this exact body already exists as `esc`, `escHtml`,
-  `escapeLiveAutoBeAlertHtml` in 12 place(s): src/analytics/operatorDailyReportTelegramHtml.js,
-  src/delivery/algoTelegramHub.js and 9 more.
+  `escapeAlertHtml` in 12 place(s): src/analytics/dailyReportHtml.js,
+  src/delivery/notifyHub.js and 9 more.
 ```
 
 It warns and never blocks. A same-named local helper is sometimes correct, and a hook cannot tell.
