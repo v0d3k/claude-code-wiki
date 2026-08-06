@@ -21,11 +21,7 @@ jobs:
       - name: Import every module with warnings as errors
         run: |
           cd bin
-          # wiki_structure is intentionally omitted: it lands in a later task
-          # (see docs/plans/2026-08-06-structure-map-layer.md). Add it back to
-          # this list once bin/wiki_structure.py exists, or this step will
-          # fail on a module nobody has written yet.
-          for f in wiki_paths wiki_record wiki_symbols wiki_queue wiki_guard; do
+          for f in wiki_paths wiki_record wiki_symbols wiki_queue wiki_guard wiki_structure; do
             python -W error::SyntaxWarning -c "import $f" || exit 1
           done
       - run: python -m pytest tests -v
