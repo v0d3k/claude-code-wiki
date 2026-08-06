@@ -44,6 +44,13 @@ def isolated_home(tmp_path, monkeypatch):
     monkeypatch.setattr(wiki_record, "VAULT", vault)
     monkeypatch.setattr(wiki_record, "AUTO_STATE", config_home / "wiki-state" / "auto-ingest.json")
 
+    # wiki_structure binds INDEX_DIR = STATE_DIR / "structure" at import time,
+    # same reason as above: patching wiki_paths.STATE_DIR alone does not move
+    # it, and without this every `build()` in a test would write into the
+    # developer's real C:\Users\user\.claude\wiki-state\structure\.
+    import wiki_structure
+    monkeypatch.setattr(wiki_structure, "INDEX_DIR", config_home / "wiki-state" / "structure")
+
     yield {"config_home": config_home, "vault": vault}
     wiki_paths._cache = None
 

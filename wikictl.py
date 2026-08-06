@@ -553,6 +553,33 @@ def cmd_dupes(args) -> int:
     return subprocess.run(cmd).returncode
 
 
+def cmd_map(args) -> int:
+    if args.rebuild:
+        rc = subprocess.run([sys.executable, str(BIN / "wiki_structure.py"), "build",
+                             *([args.repo] if args.repo else []), "--full"]).returncode
+        if rc != 0:
+            return rc
+    cmd = [sys.executable, str(BIN / "wiki_structure.py"), "map", "--top", str(args.top)]
+    if args.repo:
+        cmd += ["--repo", args.repo]
+    return subprocess.run(cmd).returncode
+
+
+def cmd_path_query(args) -> int:
+    cmd = [sys.executable, str(BIN / "wiki_structure.py"), "path", args.source, args.target]
+    if args.repo:
+        cmd += ["--repo", args.repo]
+    return subprocess.run(cmd).returncode
+
+
+def cmd_levers(args) -> int:
+    cmd = [sys.executable, str(BIN / "wiki_structure.py"), "levers", args.name,
+           "--limit", str(args.limit)]
+    if args.repo:
+        cmd += ["--repo", args.repo]
+    return subprocess.run(cmd).returncode
+
+
 def cmd_add(args) -> int:
     from wiki_install_git_hooks import install as install_hook
     from wiki_record import RAW_DIRNAME, register_project
@@ -795,6 +822,24 @@ def main() -> int:
     p.add_argument("--repo")
     p.add_argument("--limit", type=int, default=20)
     p.set_defaults(func=cmd_dupes)
+
+    p = sub.add_parser("map", help="module map: fan-in, fan-out, contended levers")
+    p.add_argument("--repo")
+    p.add_argument("--top", type=int, default=10)
+    p.add_argument("--rebuild", action="store_true", help="rescan before printing")
+    p.set_defaults(func=cmd_map)
+
+    p = sub.add_parser("path", help="import path between two files")
+    p.add_argument("source")
+    p.add_argument("target")
+    p.add_argument("--repo")
+    p.set_defaults(func=cmd_path_query)
+
+    p = sub.add_parser("levers", help="who writes this table, reads this env key, emits this event")
+    p.add_argument("name")
+    p.add_argument("--repo")
+    p.add_argument("--limit", type=int, default=20)
+    p.set_defaults(func=cmd_levers)
 
     p = sub.add_parser("add")
     p.add_argument("path")

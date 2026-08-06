@@ -23,6 +23,7 @@ import subprocess
 import sys
 import time
 from collections import defaultdict, deque
+from difflib import get_close_matches
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -145,6 +146,15 @@ def build(root: Path, changed: list[str] | None = None) -> dict:
             if any(facts.values()):
                 files[rel] = facts
     else:
+        # diff-tree lists deletions and renames-away too, not just edits: a
+        # `rel` that no longer exists (or moved out of the tracked suffixes)
+        # must both drop its own entry AND stop being a valid import target
+        # for every file that pointed at it -- otherwise those edges go stale
+        # and stay wrong until the next --full rebuild. A file that still
+        # exists but currently extracts to zero facts is NOT "gone": it is an
+        # ordinary factless leaf, same as any import target that was never a
+        # `files` key, so edges pointing at it are left alone.
+        gone: set[str] = set()
         for rel in {c.replace("\\", "/") for c in changed}:
             files.pop(rel, None)
             f = root / rel
@@ -152,6 +162,15 @@ def build(root: Path, changed: list[str] | None = None) -> dict:
                 facts = scan_file(f, root)
                 if any(facts.values()):
                     files[rel] = facts
+            else:
+                gone.add(rel)
+        if gone:
+            for facts in files.values():
+                imports = facts.get("imports")
+                if imports:
+                    pruned = [i for i in imports if i not in gone]
+                    if len(pruned) != len(imports):
+                        facts["imports"] = pruned
 
     idx = {"v": INDEX_VERSION, "files": files}
     INDEX_DIR.mkdir(parents=True, exist_ok=True)
@@ -234,3 +253,148 @@ def contended(idx: dict, minimum: int = 2) -> list[tuple[str, list[str]]]:
             by_lever[w].append(rel)
     rows = [(k, sorted(v)) for k, v in by_lever.items() if len(v) >= minimum]
     return sorted(rows, key=lambda kv: -len(kv[1]))
+
+
+def _norm_rel(p: str) -> str:
+    """User-typed path -> index-key shape.
+
+    Index keys are always forward-slashed (see build()/scan_file()). A path
+    pasted from an editor or from `where` output on Windows commonly carries
+    backslashes; without this, a perfectly real file looks unknown to `path`
+    and `levers` just because the separator does not match.
+    """
+    return p.replace("\\", "/")
+
+
+def describe_path(idx: dict, source: str, target: str) -> tuple[int, list[str]]:
+    """Answer for the `path` verb, without touching stdio.
+
+    Distinguishes "one of these files isn't in the index" (probably a typo --
+    with 1000+ files that is the likelier case) from "both are indexed but no
+    import connects them" (a real, useful negative). Both endpoints get
+    checked even when only one is unknown, so a single run surfaces every
+    typo instead of making the caller fix-and-rerun once per bad name.
+    """
+    files = idx.get("files", {})
+    src, dst = _norm_rel(source), _norm_rel(target)
+    unknown = [p for p in (src, dst) if p not in files]
+    if unknown:
+        lines = []
+        for p in unknown:
+            near = get_close_matches(p, files.keys(), n=3, cutoff=0.6)
+            msg = f"{p}: not in the structure index"
+            if near:
+                msg += f" -- did you mean: {', '.join(near)}?"
+            lines.append(msg)
+        return 1, lines
+    route = shortest_path(idx, src, dst)
+    if route is None:
+        return 1, [f"no import path from {src} to {dst} "
+                    "(both files are indexed, they just don't connect)"]
+    return 0, [("  " * i) + ("-> " if i else "") + step for i, step in enumerate(route)]
+
+
+def cmd_build(args) -> int:
+    root = Path(args.repo).resolve() if args.repo else repo_root()
+    if root is None:
+        print("not a git repository", file=sys.stderr)
+        return 1
+    t0 = time.time()
+    changed = None
+    if not args.full:
+        out = subprocess.run(["git", "-C", str(root), "diff-tree", "--no-commit-id",
+                              "--name-only", "-r", "HEAD"],
+                             capture_output=True, text=True, timeout=30)
+        if out.returncode == 0 and out.stdout.strip():
+            changed = [ln.strip() for ln in out.stdout.splitlines() if ln.strip()]
+    idx = build(root, changed)
+    edges = sum(len(f["imports"]) for f in idx["files"].values())
+    kind = "full" if changed is None else f"incremental ({len(changed)} file(s))"
+    print(f"{root.name}: {len(idx['files'])} files, {edges} import edges, "
+          f"{len(contended(idx))} contended levers, {kind}, {time.time() - t0:.2f}s")
+    return 0
+
+
+def cmd_map(args) -> int:
+    root = Path(args.repo).resolve() if args.repo else repo_root()
+    idx = load_index(root) if root else {}
+    if not idx.get("files"):
+        print("no structure index; run: wikictl map --rebuild")
+        return 1
+    fi, fo = fan_in(idx), fan_out(idx)
+    print(f"{len(idx['files'])} files, {sum(fo.values())} import edges\n")
+    print("most depended on (fan-in):")
+    for rel, c in sorted(fi.items(), key=lambda kv: -kv[1])[:args.top]:
+        print(f"  {c:4}  {rel}")
+    print("\nmost dependent (fan-out):")
+    for rel, c in sorted(fo.items(), key=lambda kv: -kv[1])[:args.top]:
+        print(f"  {c:4}  {rel}")
+    rows = contended(idx)
+    if rows:
+        print("\nshared levers with more than one writer:")
+        for lever, files in rows[:args.top]:
+            print(f"  {len(files):4}  {lever}: {', '.join(files[:3])}"
+                  f"{' …' if len(files) > 3 else ''}")
+    print("\nStatic requires and literal SQL only. Dynamic requires, ORM calls and "
+          "computed table names are invisible to this index.")
+    return 0
+
+
+def cmd_path(args) -> int:
+    root = Path(args.repo).resolve() if args.repo else repo_root()
+    idx = load_index(root) if root else {}
+    code, lines = describe_path(idx, args.source, args.target)
+    for line in lines:
+        print(line)
+    return code
+
+
+def cmd_levers(args) -> int:
+    root = Path(args.repo).resolve() if args.repo else repo_root()
+    idx = load_index(root) if root else {}
+    name = _norm_rel(args.name)
+    files = writers(idx, name)
+    if not files:
+        print(f"{args.name}: no file writes, reads or emits this")
+        return 1
+    print(f"{args.name}: {len(files)} file(s)")
+    for rel in files[:args.limit]:
+        print(f"  {rel}")
+    if len(files) > args.limit:
+        print(f"  ... and {len(files) - args.limit} more")
+    return 0
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(prog="wiki_structure", description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    p = sub.add_parser("build")
+    p.add_argument("repo", nargs="?")
+    p.add_argument("--full", action="store_true")
+    p.set_defaults(func=cmd_build)
+
+    p = sub.add_parser("map")
+    p.add_argument("--repo")
+    p.add_argument("--top", type=int, default=10)
+    p.set_defaults(func=cmd_map)
+
+    p = sub.add_parser("path")
+    p.add_argument("source")
+    p.add_argument("target")
+    p.add_argument("--repo")
+    p.set_defaults(func=cmd_path)
+
+    p = sub.add_parser("levers")
+    p.add_argument("name")
+    p.add_argument("--repo")
+    p.add_argument("--limit", type=int, default=20)
+    p.set_defaults(func=cmd_levers)
+
+    args = ap.parse_args()
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

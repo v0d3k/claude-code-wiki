@@ -1,5 +1,7 @@
 """Levers are the coupling an import graph cannot see: two functions that write
 the same table contend even though neither imports the other."""
+import subprocess
+
 import wiki_structure
 
 
@@ -141,3 +143,132 @@ def test_duplicate_import_specifiers_resolve_to_one_edge(tmp_path):
                     encoding="utf-8")
     facts = wiki_structure.scan_file(src, tmp_path)
     assert facts["imports"] == ["db.js"]
+
+
+# --------------------------------------------------------------------------- describe_path (CLI `path` verb)
+
+IDX_PATH = {"v": 1, "files": {
+    "src/a.js": {"imports": ["src/b.js"], "writes": [], "env": [], "emits": []},
+    "src/b.js": {"imports": [], "writes": [], "env": [], "emits": []},
+    "src/c.js": {"imports": [], "writes": [], "env": [], "emits": []},  # real, but unconnected
+}}
+
+
+def test_describe_path_normalizes_windows_backslashes():
+    # A path pasted from an editor or from `where` output on Windows commonly
+    # carries backslashes; index keys are always forward-slashed (build()/
+    # scan_file()), so the CLI boundary has to normalize before lookup.
+    code, lines = wiki_structure.describe_path(IDX_PATH, "src\\a.js", "src\\b.js")
+    assert code == 0
+    assert lines == ["src/a.js", "  -> src/b.js"]
+
+
+def test_describe_path_unknown_endpoint_is_not_confused_with_unreachable():
+    # Typo case: says the file isn't indexed at all.
+    code, lines = wiki_structure.describe_path(IDX_PATH, "src/a.js", "src/nope.js")
+    assert code == 1
+    assert "not in the structure index" in lines[0]
+
+    # Unreachable case: both files are real and indexed, they just don't
+    # connect -- a distinct message so a real gap doesn't send the reader
+    # typo-hunting for a name that was always correct.
+    code2, lines2 = wiki_structure.describe_path(IDX_PATH, "src/a.js", "src/c.js")
+    assert code2 == 1
+    assert "not in the structure index" not in lines2[0]
+    assert "no import path" in lines2[0]
+
+
+def test_describe_path_suggests_near_matches_for_unknown_endpoints():
+    code, lines = wiki_structure.describe_path(IDX_PATH, "src/aa.js", "src/c.js")
+    assert code == 1
+    assert "did you mean" in lines[0]
+    assert "src/a.js" in lines[0]
+
+
+def test_describe_path_reports_every_unknown_endpoint_in_one_run():
+    # With 1000+ files a typo is the likelier failure than "unconnected", and
+    # a caller who mistyped both ends should not have to fix-and-rerun twice.
+    code, lines = wiki_structure.describe_path(IDX_PATH, "nope1.js", "nope2.js")
+    assert code == 1
+    assert len(lines) == 2
+
+
+# --------------------------------------------------------------------------- incremental build vs. deletions
+
+def _git(repo, *args):
+    r = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    return r.stdout
+
+
+def _commit_all(repo, message):
+    _git(repo, "add", "-A")
+    _git(repo, "-c", "user.email=t@t.com", "-c", "user.name=t", "commit", "-qm", message)
+
+
+def _diff_tree_head(repo):
+    out = _git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD")
+    return [ln.strip() for ln in out.splitlines() if ln.strip()]
+
+
+def test_incremental_build_removes_the_deleted_files_own_entry(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    _git(repo, "init", "-q")
+    (repo / "src" / "b.js").write_text("const t = process.env.SOME_KEY;\n", encoding="utf-8")
+    _commit_all(repo, "init")
+    idx = wiki_structure.build(repo, changed=None)
+    assert "src/b.js" in idx["files"]
+
+    (repo / "src" / "b.js").unlink()
+    _commit_all(repo, "delete b")
+    changed = _diff_tree_head(repo)
+    assert changed == ["src/b.js"]
+
+    idx2 = wiki_structure.build(repo, changed)  # must not raise on a vanished path
+    assert "src/b.js" not in idx2["files"]
+
+
+def test_incremental_build_prunes_dangling_edges_in_files_diff_tree_never_mentions(tmp_path):
+    # diff-tree HEAD only reports the file that was actually deleted, not
+    # everyone who imports it, so an unrelated importer that build() never
+    # rescans would otherwise keep pointing at a file that no longer exists.
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    _git(repo, "init", "-q")
+    (repo / "src" / "a.js").write_text("require('./b');\n", encoding="utf-8")
+    (repo / "src" / "b.js").write_text("const t = process.env.SOME_KEY;\n", encoding="utf-8")
+    _commit_all(repo, "init")
+    idx = wiki_structure.build(repo, changed=None)
+    assert idx["files"]["src/a.js"]["imports"] == ["src/b.js"]
+
+    (repo / "src" / "b.js").unlink()
+    _commit_all(repo, "delete b")
+    changed = _diff_tree_head(repo)
+    assert changed == ["src/b.js"]  # a.js itself was NOT touched by this commit
+
+    idx2 = wiki_structure.build(repo, changed)
+    assert idx2["files"]["src/a.js"]["imports"] == []
+
+
+def test_incremental_build_keeps_edges_to_files_that_still_exist_but_lost_their_facts(tmp_path):
+    # Losing facts is not the same as being deleted: a file that still exists
+    # on disk, just currently without SQL writes/env/emits/imports of its own,
+    # is an ordinary factless leaf -- same as any import target that was never
+    # a `files` key -- so edges pointing at it must survive the sweep.
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    _git(repo, "init", "-q")
+    (repo / "src" / "a.js").write_text("require('./b');\n", encoding="utf-8")
+    (repo / "src" / "b.js").write_text("const t = process.env.SOME_KEY;\n", encoding="utf-8")
+    _commit_all(repo, "init")
+    wiki_structure.build(repo, changed=None)
+
+    (repo / "src" / "b.js").write_text("module.exports = {};\n", encoding="utf-8")  # -> zero facts
+    _commit_all(repo, "strip facts from b")
+    changed = _diff_tree_head(repo)
+    assert changed == ["src/b.js"]
+
+    idx2 = wiki_structure.build(repo, changed)
+    assert "src/b.js" not in idx2["files"]                        # factless, so not its own key ...
+    assert idx2["files"]["src/a.js"]["imports"] == ["src/b.js"]   # ... but the edge survives
