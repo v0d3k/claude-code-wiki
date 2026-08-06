@@ -55,6 +55,26 @@ def test_map_rebuild_runs_a_full_build_before_the_map_call(monkeypatch):
     assert map_cmd[-5:] == ["map", "--top", "5", "--repo", "R"]
 
 
+def test_map_write_forwards_alongside_repo(monkeypatch):
+    # Task 6 already made cmd_map forward --repo; adding --write must not
+    # regress that combination (they are independent conditionals in
+    # cmd_map, but only a test pins the combination itself).
+    calls = _fake_run(monkeypatch)
+    monkeypatch.setattr(sys, "argv",
+                        ["wikictl.py", "map", "--write", "--top", "3", "--repo", "R"])
+    assert wikictl.main() == 0
+    cmd = calls[-1]
+    assert "--repo" in cmd and cmd[cmd.index("--repo") + 1] == "R"
+    assert "--write" in cmd
+
+
+def test_map_without_write_does_not_forward_the_flag(monkeypatch):
+    calls = _fake_run(monkeypatch)
+    monkeypatch.setattr(sys, "argv", ["wikictl.py", "map", "--top", "5", "--repo", "R"])
+    assert wikictl.main() == 0
+    assert "--write" not in calls[-1]
+
+
 def test_path_cli_forwards_source_and_target_positionally(monkeypatch):
     calls = _fake_run(monkeypatch)
     monkeypatch.setattr(sys, "argv", ["wikictl.py", "path", "src\\a.js", "src\\b.js"])

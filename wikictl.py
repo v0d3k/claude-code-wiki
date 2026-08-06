@@ -562,6 +562,8 @@ def cmd_map(args) -> int:
     cmd = [sys.executable, str(BIN / "wiki_structure.py"), "map", "--top", str(args.top)]
     if args.repo:
         cmd += ["--repo", args.repo]
+    if args.write:
+        cmd.append("--write")
     return subprocess.run(cmd).returncode
 
 
@@ -827,6 +829,7 @@ def main() -> int:
     p.add_argument("--repo")
     p.add_argument("--top", type=int, default=10)
     p.add_argument("--rebuild", action="store_true", help="rescan before printing")
+    p.add_argument("--write", action="store_true", help="also write module pages into the vault")
     p.set_defaults(func=cmd_map)
 
     p = sub.add_parser("path", help="import path between two files")
