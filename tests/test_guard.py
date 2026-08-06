@@ -45,3 +45,12 @@ def test_the_file_being_written_never_reports_itself(monkeypatch):
     same file back (unchanged) must stay silent."""
     monkeypatch.setattr(wiki_guard, "declared", lambda t, s: [("solo", "hsolo")])
     assert _check(monkeypatch, "irrelevant", exclude="src/e.js") == []
+
+
+def test_variant_count_ignores_the_file_being_written(monkeypatch):
+    """The count beside the file list must describe the same set as the list."""
+    monkeypatch.setattr(wiki_guard, "declared", lambda t, s: [("num", "hbrandnew")])
+    out = _check(monkeypatch, "irrelevant", exclude="src/a.js")
+    assert len(out) == 1
+    assert "1 file(s)" in out[0]
+    assert "2 different implementations" not in out[0]

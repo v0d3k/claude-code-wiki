@@ -79,7 +79,8 @@ def check(text: str, suffix: str, root: Path, exclude_file: str) -> list[str]:
 
         files = {loc.rsplit(":", 1)[0] for loc in locs}
         if len(files) >= threshold:
-            variants = len({e.get("h") for e in entries if e.get("h")})
+            surviving = [e for e in entries if e["loc"].rsplit(":", 1)[0] != exclude_file]
+            variants = len({e.get("h") for e in surviving if e.get("h")})
             what = (f"{variants} different implementations" if variants > 1
                     else "a different implementation")
             diverged.append(
