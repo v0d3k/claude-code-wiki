@@ -170,3 +170,67 @@ def load_index(root: Path) -> dict:
     except (OSError, json.JSONDecodeError):
         return {"v": INDEX_VERSION, "files": {}}
     return idx if idx.get("v") == INDEX_VERSION else {"v": INDEX_VERSION, "files": {}}
+
+
+def fan_in(idx: dict) -> dict:
+    """How many files import each file."""
+    counts: dict[str, int] = defaultdict(int)
+    for facts in idx.get("files", {}).values():
+        for target in facts.get("imports", []):
+            counts[target] += 1
+    return dict(counts)
+
+
+def fan_out(idx: dict) -> dict:
+    return {rel: len(f.get("imports", [])) for rel, f in idx.get("files", {}).items()}
+
+
+def shortest_path(idx: dict, src: str, dst: str) -> list[str] | None:
+    """Breadth-first over import edges. Direction matters: a imports b, not back.
+
+    src == dst returns the trivial one-node path [src] rather than None --
+    None means unreachable, and a file always reaches itself.
+    """
+    files = idx.get("files", {})
+    if src not in files:
+        return None
+    queue, seen = deque([[src]]), {src}
+    while queue:
+        route = queue.popleft()
+        if route[-1] == dst:
+            return route
+        for nxt in files.get(route[-1], {}).get("imports", []):
+            if nxt not in seen:
+                seen.add(nxt)
+                queue.append(route + [nxt])
+    return None
+
+
+def writers(idx: dict, lever: str) -> list[str]:
+    """Files that write the named table, read the named env key, or emit the event.
+
+    One CLI verb for three different kinds of coupling, on purpose -- callers
+    ask "who touches this" without caring which kind it is. Matching is NOT
+    uniformly case-insensitive: table names are lowercased at extraction time
+    (see extract()), so table lookups match any case; env keys and event names
+    are stored exactly as written in the source, so those two match only the
+    exact case given here.
+    """
+    key = lever.lower()
+    out = []
+    for rel, facts in sorted(idx.get("files", {}).items()):
+        if (key in [w.lower() for w in facts.get("writes", [])]
+                or lever in facts.get("env", [])
+                or lever in facts.get("emits", [])):
+            out.append(rel)
+    return out
+
+
+def contended(idx: dict, minimum: int = 2) -> list[tuple[str, list[str]]]:
+    """Levers with more than one writer, worst first."""
+    by_lever: dict[str, list[str]] = defaultdict(list)
+    for rel, facts in idx.get("files", {}).items():
+        for w in facts.get("writes", []):
+            by_lever[w].append(rel)
+    rows = [(k, sorted(v)) for k, v in by_lever.items() if len(v) >= minimum]
+    return sorted(rows, key=lambda kv: -len(kv[1]))
