@@ -8,10 +8,12 @@ This is the UNATTENDED path -- a scheduled or CI run, with no session around.
 The normal path is in-session: the Stop hook wakes the model you are already
 working with and it runs the /wiki-ingest skill directly.
 
-Engine order (first reachable wins):
-  1. claude   -- `claude -p /wiki-ingest`, needs CLAUDE_CODE_OAUTH_TOKEN,
-                 ANTHROPIC_API_KEY or a logged-in CLI.
-  2. ollama   -- local Ollama on 127.0.0.1:11434.
+Engines are exactly those listed in `engines` (default: ["claude"] alone), tried
+in order, first reachable wins. Naming one that is not listed is refused rather
+than honoured -- see pick_engine. Supported names:
+  claude   -- `claude -p /wiki-ingest`, needs CLAUDE_CODE_OAUTH_TOKEN,
+              ANTHROPIC_API_KEY or a logged-in CLI.
+  ollama   -- local Ollama on 127.0.0.1:11434. Not enabled by default.
 
 The ollama path runs the deterministic loop in this file: the model only returns
 a small JSON verdict, and Python does every file write, path check, index update
@@ -20,6 +22,7 @@ outside the vault or lose a raw block.
 
 Usage:
   python wiki_ingest.py [--engine auto|claude|ollama] [--limit N] [--dry-run]
+                        [--force-engine]   # accept an engine outside `engines`
 """
 import argparse
 import json
@@ -123,8 +126,21 @@ def endpoint_alive(url: str, timeout: float = 3.0) -> bool:
     return False
 
 
-def pick_engine(cfg: dict, want: str) -> str | None:
-    order = [want] if want != "auto" else cfg["engines"]
+def pick_engine(cfg: dict, want: str, force: bool = False) -> str | None:
+    """Engines outside `engines` are not reachable, even by name.
+
+    A silent downgrade to a small local model is the worst failure this system
+    has: the pages land, look like every other page, and only log.md records
+    which model wrote them. Naming an unlisted engine on the command line is
+    therefore refused unless --force-engine says the weaker result is wanted.
+    """
+    allowed = list(cfg.get("engines", []))
+    if want != "auto" and want not in allowed and not force:
+        log(f"refusing engine '{want}': not in `engines` ({allowed}). "
+            f"Add it to the config, or pass --force-engine to accept weaker pages "
+            f"for this run. In-session /wiki-ingest uses your own model and needs neither.")
+        return None
+    order = [want] if want != "auto" else allowed
     for name in order:
         if name == "claude" and have_claude_token():
             return "claude"
@@ -486,6 +502,8 @@ def main() -> int:
     ap.add_argument("--mode", default="ingest", choices=["ingest", "lint"])
     ap.add_argument("--limit", type=int)
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--force-engine", action="store_true",
+                    help="use an engine that is not listed in `engines`, accepting weaker pages")
     args = ap.parse_args()
 
     cfg = load_config()
@@ -501,7 +519,7 @@ def main() -> int:
             "another run is working the same queue")
         return 0
 
-    engine = pick_engine(cfg, args.engine)
+    engine = pick_engine(cfg, args.engine, getattr(args, "force_engine", False))
     if engine is None:
         log("abort: no unattended engine available. This path needs its own credential "
             "(CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_API_KEY) or a local engine listed in "
@@ -509,6 +527,9 @@ def main() -> int:
             "run /wiki-ingest, which uses the model you are already working with.")
         return 3
 
+    if engine != "claude":
+        log(f"WARNING: running on '{engine}'. Pages from a small local model read like any "
+            f"other page; log.md is the only place that records which model wrote them.")
     log(f"start: engine={engine} mode={args.mode}")
     lock = None
     if not args.dry_run:
@@ -523,7 +544,7 @@ def main() -> int:
         if code != 2:
             return code
         # Token turned out to be missing or stale: continue down the chain.
-        engine = pick_engine(cfg, "ollama")
+        engine = pick_engine(cfg, "ollama", getattr(args, "force_engine", False))
         if engine is None:
             return 3
         log(f"fallback engine={engine}")
