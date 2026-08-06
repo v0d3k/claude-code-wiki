@@ -91,6 +91,13 @@ def main() -> int:
         except Exception as e:
             _log(f"symbol index update skipped: {e}")
 
+        try:
+            from wiki_structure import build as build_structure
+            if changed_paths:
+                build_structure(raw_dir.parent, changed_paths)
+        except Exception as e:
+            _log(f"structure index update skipped: {e}")
+
         _log(f"commit slug={slug} sha={sha} files={len(files)}")
         return 0
     except Exception as e:  # never break a commit

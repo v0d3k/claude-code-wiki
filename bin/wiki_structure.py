@@ -128,15 +128,26 @@ def index_path(root: Path) -> Path:
 def build(root: Path, changed: list[str] | None = None) -> dict:
     path = index_path(root)
     files: dict[str, dict] = {}
-    if changed is not None and path.exists():
-        try:
-            loaded = json.loads(path.read_text(encoding="utf-8"))
-            if loaded.get("v") == INDEX_VERSION:
-                files = loaded.get("files", {})
-            else:
-                changed = None
-        except (OSError, json.JSONDecodeError):
+    if changed is not None:
+        if not path.exists():
+            # No index on disk yet -- there is nothing to apply an incremental
+            # patch on top of. Without this, the very first call (typically
+            # the first post-commit hook run in a repo) would seed a stub
+            # index containing only that one commit's files, and every
+            # subsequent incremental update would keep building on top of
+            # that partial base -- silently and permanently missing every
+            # file that existed before the index did. Fall back to a full
+            # scan instead, same as if the caller had passed changed=None.
             changed = None
+        else:
+            try:
+                loaded = json.loads(path.read_text(encoding="utf-8"))
+                if loaded.get("v") == INDEX_VERSION:
+                    files = loaded.get("files", {})
+                else:
+                    changed = None
+            except (OSError, json.JSONDecodeError):
+                changed = None
 
     if changed is None:
         files = {}

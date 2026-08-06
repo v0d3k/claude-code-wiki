@@ -211,6 +211,26 @@ def _diff_tree_head(repo):
     return [ln.strip() for ln in out.splitlines() if ln.strip()]
 
 
+def test_incremental_build_falls_back_to_full_scan_when_no_index_exists_yet(tmp_path):
+    # This is what the post-commit hook does on a repo's first commit: call
+    # build(root, changed) with only the files that one commit touched, on a
+    # repo where no structure index has ever been written. A true incremental
+    # apply on top of an empty base would silently seed a stub index holding
+    # only those files -- src/c.js below sits on disk already but is not part
+    # of `changed`, so it only ends up in the index if build() detects the
+    # missing index file and falls back to a full scan.
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    (repo / "src" / "a.js").write_text("require('./b');\n", encoding="utf-8")
+    (repo / "src" / "b.js").write_text("module.exports = {};\n", encoding="utf-8")  # zero facts
+    (repo / "src" / "c.js").write_text("const t = process.env.SOME_KEY;\n", encoding="utf-8")
+
+    idx = wiki_structure.build(repo, changed=["src/a.js"])
+
+    assert "src/c.js" in idx["files"]  # only reachable via a full scan
+    assert "src/a.js" in idx["files"]
+
+
 def test_incremental_build_removes_the_deleted_files_own_entry(tmp_path):
     repo = tmp_path / "repo"
     (repo / "src").mkdir(parents=True)
