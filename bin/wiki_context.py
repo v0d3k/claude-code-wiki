@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from wiki_paths import load_config  # noqa: E402
 from wiki_record import VAULT, _log, _read_event, is_ignored, resolve_repo  # noqa: E402
 
 MAX_INDEX_CHARS = 2600
@@ -49,6 +50,38 @@ def count_unprocessed(raw_dir: Path) -> int:
     return max(0, total - len(list(raw_dir.glob("*.md"))))
 
 
+def structure_orientation(root) -> str:
+    """A few lines of shape, not the whole map.
+
+    The catalog above tells the model what has been decided. This tells it what
+    the code is built out of, so it does not have to grep to find out that one
+    module is imported by a hundred others.
+    """
+    cfg = load_config()
+    if not cfg.get("orient_enabled", True):
+        return ""
+    try:
+        from wiki_structure import contended, fan_in, load_index
+    except Exception:
+        return ""
+    idx = load_index(root)
+    if not idx.get("files"):
+        return ""
+    lines = ["", "## Structure (regenerated on every commit)", ""]
+    fi = sorted(fan_in(idx).items(), key=lambda kv: -kv[1])[:int(cfg.get("orient_modules", 8))]
+    if fi:
+        lines.append("Most depended on:")
+        lines += [f"- `{rel}` — imported by {c}" for rel, c in fi]
+    rows = contended(idx)[:int(cfg.get("orient_levers", 5))]
+    if rows:
+        lines += ["", "Shared state with more than one writer:"]
+        lines += [f"- `{lever}` — written from {len(files)} file(s)" for lever, files in rows]
+    lines += ["", "`wikictl map` for the rest, `wikictl levers <name>` for one resource, "
+              "`wikictl path A B` for how two files connect. Static requires and literal SQL "
+              "only — dynamic requires and ORM calls are invisible to it."]
+    return "\n".join(lines)
+
+
 def main() -> int:
     if os.environ.get("WIKI_RECORD_DISABLE") == "1":
         return 0
@@ -59,6 +92,7 @@ def main() -> int:
             return 0
 
         slug, raw_dir, _branch = resolve_repo(cwd)
+        root = raw_dir.parent  # the repository root (see wiki_commit.py for the same relationship)
         pdir = VAULT / "projects" / slug
         index = pdir / "index.md"
         if not index.exists():
@@ -90,6 +124,10 @@ def main() -> int:
                 f"Note: {pending} raw block(s) recorded but not yet ingested, so the catalog may lag the last few sessions. "
                 "Run `/wiki-ingest` to fold them in.",
             ]
+
+        orientation = structure_orientation(root)
+        if orientation:
+            parts.append(orientation)
 
         out = {
             "hookSpecificOutput": {

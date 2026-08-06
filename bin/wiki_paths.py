@@ -57,6 +57,11 @@ DEFAULTS = {
     "guard_enabled": True,
     "guard_on_edit": False,     # Write only by default; Edit costs ~190 ms per call
     "guard_min_existing": 1,    # warn once the name exists in this many other files
+    # Structure orientation injected at session start. Small on purpose: it is
+    # a pointer to `wikictl map`, not a substitute for it.
+    "orient_enabled": True,
+    "orient_modules": 8,
+    "orient_levers": 5,
     # Keep the journal out of `git status` by adding it to .git/info/exclude
     # (local, never committed, invisible to collaborators).
     "git_exclude_raw": True,

@@ -51,6 +51,13 @@ def isolated_home(tmp_path, monkeypatch):
     import wiki_structure
     monkeypatch.setattr(wiki_structure, "INDEX_DIR", config_home / "wiki-state" / "structure")
 
+    # wiki_context.py imports VAULT by value too (`from wiki_record import
+    # VAULT`), same reason as above -- without this, SessionStart's main()
+    # would look for the project catalog under the developer's real vault
+    # instead of this test's, and silently no-op (return 0, no stdout).
+    import wiki_context
+    monkeypatch.setattr(wiki_context, "VAULT", vault)
+
     yield {"config_home": config_home, "vault": vault}
     wiki_paths._cache = None
 
