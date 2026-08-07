@@ -26,9 +26,9 @@ Run the command, then report what it printed in plain language. Do not re-implem
 | где уже определено имя | `where <name>` |
 | сколько дублей в проекте | `dupes [--kind identical\|diverged\|renamed]` |
 | пересобрать индекс символов | `symbols [--full]` |
-| карта проекта, кто на кого завязан | `map [--top N] [--rebuild] [--write]` |
+| карта проекта, кто на кого завязан | `map [--top N] [--rebuild] [--write] [--no-tests]` |
 | как связаны два файла | `path <a> <b>` |
-| кто ещё пишет в эту таблицу / читает ключ | `levers <name> [--limit N]` |
+| кто ещё пишет в эту таблицу / читает ключ | `levers <name> [--limit N] [--no-tests]` |
 | снеси / удали систему | `uninstall` |
 | фоновый прогон по расписанию | `schedule install|remove|status` |
 

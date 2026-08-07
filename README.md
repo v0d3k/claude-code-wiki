@@ -98,6 +98,15 @@ the file lands:
 
 It warns and never blocks. A same-named local helper is sometimes correct, and a hook cannot tell.
 
+**And warns about shared state, at the moment you touch it.** The same hook reads what tables the file being written writes to, and says who else already writes them:
+
+```
+- `signal_records` — 56 file(s) already write this table (17 outside tests). Check
+  `wikictl levers signal_records` before changing its shape.
+```
+
+This is the one that has no cheap equivalent. A duplicate helper is annoying; a schema changed under fifty-six writers is an outage. The check costs ~1 ms on a typical file because it loads a small levers summary rather than the structure index.
+
 **Maps the structure.** A second index records who imports whom, and who writes to each shared
 resource — a SQL table, an env key, an emitted event. It refreshes on every commit, so it cannot
 drift the way a generated snapshot does. `wikictl map` prints the shape, `wikictl path A B` shows
@@ -197,9 +206,9 @@ The vault is plain markdown with relative links — it renders as a graph in Obs
 | `where NAME` | every definition of a name, with `file:line` |
 | `dupes [--kind identical\|diverged\|renamed]` | duplication split by kind, worst first |
 | `symbols [--full]` | rebuild the symbol index |
-| `map [--top N] [--rebuild] [--write]` | fan-in, fan-out, and the resources several files write to |
+| `map [--top N] [--rebuild] [--write] [--no-tests]` | fan-in, fan-out, and the resources several files write to. `--write` also files a page per top module in the project catalog |
 | `path A B` | the import route between two files, or why there isn't one |
-| `levers NAME` | every file that writes this table, reads this env key, or emits this event |
+| `levers NAME [--no-tests]` | every file that writes this table, reads this env key, or emits this event |
 | `search "QUERY"` | grep the vault |
 | `schedule [install\|remove\|status]` | optional background ingest: Task Scheduler or cron |
 | `add PATH` / `remove SLUG` | wire or unwire one repository |
