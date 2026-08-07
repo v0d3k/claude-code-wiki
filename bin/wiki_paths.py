@@ -57,6 +57,11 @@ DEFAULTS = {
     "guard_enabled": True,
     "guard_on_edit": False,     # Write only by default; Edit costs ~190 ms per call
     "guard_min_existing": 1,    # warn once the name exists in this many other files
+    # Contended-table warning: how many OTHER files (after subtracting this one's
+    # own prior contribution) must already write a table before the guard speaks
+    # up about it. 2 -- a single owner is normal, not a signal; the warning is
+    # for tables more than one file already depends on the shape of.
+    "guard_min_lever_writers": 2,
     # Structure orientation injected at session start. Small on purpose: it is
     # a pointer to `wikictl map`, not a substitute for it.
     "orient_enabled": True,

@@ -10,20 +10,24 @@ runs inside a git hook. It sees static requires, literal SQL and literal event
 names. Dynamic requires, ORM calls and computed table names are invisible, and
 the CLI says so rather than pretending completeness.
 
+The guard never loads the index this module builds (a few hundred KB) -- only
+the tiny levers-summary sibling written alongside it, via load_levers_summary()
+and extract_writes() below. `argparse`, `subprocess` and `difflib` are CLI-only
+and imported lazily inside the functions that use them for exactly that reason:
+importing them at module level cost real, measured milliseconds on every guard
+invocation for work the guard never does.
+
     python wiki_structure.py build <repo> [--full]
     python wiki_structure.py map   [--repo PATH] [--top N]
     python wiki_structure.py path  <from> <to> [--repo PATH]
     python wiki_structure.py levers <name> [--repo PATH]
 """
-import argparse
 import json
 import os
 import re
-import subprocess
 import sys
 import time
 from collections import defaultdict, deque
-from difflib import get_close_matches
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -103,9 +107,18 @@ def _fired(pattern: re.Pattern, text: str) -> set[str]:
     return out
 
 
+def extract_writes(text: str) -> set[str]:
+    """Just the table-write facet of extract() -- the one thing the guard's
+    contended-table check needs. Skipping the import/env/emit regex passes
+    matters on a large file: on a ~90 KB real-world source file, extract()
+    costs ~6 ms and this alone costs ~2 ms, and the guard runs it twice (new
+    content and old) on every Write."""
+    return {t.lower() for t in SQL_WRITE.findall(text)} - NOT_A_TABLE
+
+
 def extract(text: str, suffix: str) -> dict:
     """Facts one file states about itself. Sets, so callers can union them."""
-    writes = {t.lower() for t in SQL_WRITE.findall(text)} - NOT_A_TABLE
+    writes = extract_writes(text)
     emits = set(EMIT.findall(text))
     if suffix in PY_SUFFIXES:
         env = set(PY_ENV.findall(text))
@@ -154,6 +167,61 @@ def scan_file(path: Path, root: Path) -> dict:
 
 def index_path(root: Path) -> Path:
     return INDEX_DIR / f"{root.name}.json"
+
+
+def levers_summary_path(root: Path) -> Path:
+    return INDEX_DIR / f"{root.name}.levers-summary.json"
+
+
+def build_levers_summary(idx: dict) -> dict[str, list[int]]:
+    """lever -> [total writers, non-test writers], for every table with >=1 writer.
+
+    Unthresholded on purpose: the guard applies its own threshold
+    (guard_min_lever_writers) at check time, the same way the symbol guard's
+    guard_min_existing is applied at check time rather than baked into its
+    index -- a table with one writer today still needs an entry to compare
+    against once a second writer shows up.
+    """
+    counts: dict[str, list[int]] = {}
+    for facts in idx.get("files", {}).values():
+        is_test = facts.get("is_test", False)
+        for w in facts.get("writes", []):
+            row = counts.setdefault(w, [0, 0])
+            row[0] += 1
+            if not is_test:
+                row[1] += 1
+    return counts
+
+
+def write_levers_summary(root: Path, idx: dict) -> dict:
+    """Guard input: a few KB, never the ~68-entry version of the full index.
+
+    Written alongside the main index by build() so the two never drift --
+    the guard loads only this file, on every Write, and must never touch
+    index_path()'s few-hundred-KB file to get it.
+    """
+    summary = {"v": INDEX_VERSION, "levers": build_levers_summary(idx)}
+    path = levers_summary_path(root)
+    INDEX_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(summary, separators=(",", ":")), encoding="utf-8")
+    tmp.replace(path)
+    return summary
+
+
+def load_levers_summary(root: Path) -> dict[str, list[int]]:
+    """The guard's structure-index read. Missing, unversioned or malformed
+    all come back as {} -- same fail-open shape as load_index()."""
+    path = levers_summary_path(root)
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if data.get("v") != INDEX_VERSION:
+        return {}
+    return data.get("levers", {})
 
 
 def build(root: Path, changed: list[str] | None = None) -> dict:
@@ -221,6 +289,7 @@ def build(root: Path, changed: list[str] | None = None) -> dict:
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(idx, separators=(",", ":")), encoding="utf-8")
     tmp.replace(path)
+    write_levers_summary(root, idx)
     return idx
 
 
@@ -339,6 +408,7 @@ def describe_path(idx: dict, source: str, target: str) -> tuple[int, list[str]]:
     src, dst = _norm_rel(source), _norm_rel(target)
     unknown = [p for p in (src, dst) if p not in files]
     if unknown:
+        from difflib import get_close_matches  # CLI-path only, see module docstring
         lines = []
         for p in unknown:
             near = get_close_matches(p, files.keys(), n=3, cutoff=0.6)
@@ -355,6 +425,7 @@ def describe_path(idx: dict, source: str, target: str) -> tuple[int, list[str]]:
 
 
 def cmd_build(args) -> int:
+    import subprocess  # CLI-path only, see module docstring
     root = Path(args.repo).resolve() if args.repo else repo_root()
     if root is None:
         print("not a git repository", file=sys.stderr)
@@ -595,6 +666,7 @@ def write_module_pages(idx: dict, vault_project: Path, top: int) -> tuple[list[s
 
 
 def main() -> int:
+    import argparse  # CLI-path only, see module docstring
     ap = argparse.ArgumentParser(prog="wiki_structure", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)

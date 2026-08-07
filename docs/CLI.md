@@ -169,6 +169,7 @@ Case-insensitive substring search across every markdown file in the vault. `--li
 | `guard_enabled` | `true` | warn when new code re-declares an existing name |
 | `guard_on_edit` | `false` | also guard `Edit`; costs ~190 ms per edit |
 | `guard_min_existing` | `1` | warn once the name exists in this many other files |
+| `guard_min_lever_writers` | `2` | warn once a table already has this many OTHER non-test writers (this file's own prior contribution is subtracted first) |
 | `orient_enabled` | `true` | inject a structure orientation at session start (~1 KB) |
 | `orient_modules` | `8` | how many modules the orientation names |
 | `orient_levers` | `5` | how many contended resources it names |
@@ -183,6 +184,7 @@ Case-insensitive substring search across every markdown file in the vault. `--li
 | `wiki-state/wiki-config.json` | the config above |
 | `wiki-state/symbols/<repo>.json` | the symbol index behind `where` and the guard |
 | `wiki-state/structure/<repo>.json` | the import and lever index behind `map`, `path`, `levers` and the session orientation |
+| `wiki-state/structure/<repo>.levers-summary.json` | lever -> [total writers, non-test writers], regenerated alongside the index above; the only structure file the guard ever loads |
 | `wiki-state/<session-id>.json` | per-session transcript cursor and accumulated block |
 | `wiki-state/ingest-runs.log` | one line per scheduled run |
 | `wiki-state/ingest-last-run.txt` / `.err` | stdout and stderr of the last run |

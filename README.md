@@ -218,7 +218,9 @@ Full reference: [docs/CLI.md](docs/CLI.md). Architecture: [docs/ARCHITECTURE.md]
 
 **The index is regex-based on purpose.** A language server knows more, but it needs a daemon and a warm-up and cannot be queried from a git hook. This has to answer during a `PreToolUse` call. Full build of 4400 files: ~2 s. Incremental update after a commit: only the files in that commit. JavaScript, TypeScript and Python are recognised.
 
-**Latency is measured, not assumed.** On Windows, against a 4400-file repository, the guard costs ~115 ms per `Write` — of which 82 ms is Python interpreter start and 32 ms is the actual index work. Resolving the repository by walking up for `.git` rather than spawning `git rev-parse` saved 30 ms of that. Adding the structure index did not move this number, because the guard never loads it. On `Write` this is a handful of calls per session; on `Edit` it would be every edit, which is why `guard_on_edit` defaults to off.
+**Latency is measured, not assumed.** On Windows, against a 4400-file repository, the guard costs ~115 ms per `Write` — of which 82 ms is Python interpreter start and 32 ms is the actual index work. Resolving the repository by walking up for `.git` rather than spawning `git rev-parse` saved 30 ms of that. On `Write` this is a handful of calls per session; on `Edit` it would be every edit, which is why `guard_on_edit` defaults to off.
+
+The contended-table check added later reads a second, much smaller file — the levers summary, never the full structure index — and re-measured, interleaved against a build without it, 12 rounds each, on a 1195-file repository: a typical (~5 KB) file adds ~1 ms, within the run-to-run noise floor; a large (~90 KB, p95+) file adds ~8 ms, since the added work is one extra regex pass over the file's own content, scaling with that file's size rather than with the repository's.
 
 **The ingest cannot feed itself.** It writes into the vault, and the recorder ignores any session whose working directory is inside the vault or the Claude config home. Without that, every ingest would produce a block describing the ingest.
 

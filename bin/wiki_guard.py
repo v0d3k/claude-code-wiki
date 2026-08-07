@@ -5,6 +5,12 @@ helper usually appears) and optionally on Edit. It reads the symbol index built
 by wiki_symbols.py -- no model call, no language server, ~8 ms of work on top of
 interpreter start.
 
+Also warns about contended tables: a file writing SQL into a table the compact
+levers summary (built alongside the structure index by wiki_structure.build())
+already shows several other writers for. That summary, not the full structure
+index, is the only thing this ever reads -- the index is a few hundred KB, the
+summary a few KB, and this runs on every Write.
+
 It never blocks. It reports locations and lets the model decide, because a
 same-named local helper is sometimes the right answer and a hook cannot tell.
 
@@ -19,9 +25,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from wiki_paths import load_config  # noqa: E402
 from wiki_record import _log, _read_event, is_ignored  # noqa: E402
 from wiki_symbols import PATTERNS, declared, declared_names, load_index, repo_root  # noqa: E402
+from wiki_structure import (JS_SUFFIXES, PY_SUFFIXES, extract_writes, is_test_file,  # noqa: E402
+                             load_levers_summary)
 
 MAX_REPORTED = 5      # names per warning
 MAX_LOCATIONS = 3     # locations per name
+STRUCTURE_SUFFIXES = JS_SUFFIXES | PY_SUFFIXES
 
 
 def _locations(entries, exclude_file: str) -> list[str]:
@@ -89,19 +98,68 @@ def check(text: str, suffix: str, root: Path, exclude_file: str) -> list[str]:
     return (identical + renamed + diverged)[:MAX_REPORTED]
 
 
-def emit(event_name: str, report: list[str], target: str) -> None:
-    body = (
-        f"Duplicate check for `{target}`:\n\n" + "\n".join(report) + "\n\n"
-        "An identical body means import it. The same body under another name means the "
-        "helper already exists and you are about to fork it. A taken name with different "
-        "behaviour is a collision — pick another name or reconcile the two. "
-        "`wikictl where <name>` shows every definition and which of them are the same code."
-    )
+def structure_check(text: str, suffix: str, summary: dict, exclude_file: str, old_text: str) -> list[str]:
+    """One line per table this write already has enough other writers for.
+
+    `summary` is the compact lever -> [total, non_test] map from
+    wiki_structure.load_levers_summary() -- NOT the full structure index,
+    which this must never load. `old_text` is whatever `exclude_file` already
+    contained on disk before this write (empty for a brand-new file): the
+    summary reflects the last commit, so if this same file already wrote the
+    table then, its own contribution is already baked into those counts and
+    must be subtracted before comparing to the threshold or displaying it --
+    the mechanical equivalent of how check() excludes exclude_file for
+    symbols, just computed differently because the summary carries no
+    per-file breakdown to filter by location.
+
+    Suffixes outside JS/TS/PY are silent: iter_source() never scanned them
+    into the structure index in the first place, so a warning here would cite
+    numbers the index cannot actually back up.
+    """
+    if not text or not summary or suffix not in STRUCTURE_SUFFIXES:
+        return []
+    threshold = int(load_config().get("guard_min_lever_writers", 2))
+    self_is_test = is_test_file(exclude_file)
+    old_writes = extract_writes(old_text) if old_text else set()
+
+    lines = []
+    for table in sorted(extract_writes(text)):
+        total, non_test = summary.get(table, [0, 0])
+        if table in old_writes:
+            total -= 1
+            if not self_is_test:
+                non_test -= 1
+        if total >= threshold:
+            lines.append(
+                f"- `{table}` — {total} file(s) already write this table "
+                f"({non_test} outside tests). Check `wikictl levers {table}` "
+                "before changing its shape.")
+    return lines
+
+
+def emit(event_name: str, report: list[str], lever_report: list[str], target: str) -> None:
+    sections = []
+    if report:
+        sections.append(
+            f"Duplicate check for `{target}`:\n\n" + "\n".join(report) + "\n\n"
+            "An identical body means import it. The same body under another name means the "
+            "helper already exists and you are about to fork it. A taken name with different "
+            "behaviour is a collision — pick another name or reconcile the two. "
+            "`wikictl where <name>` shows every definition and which of them are the same code."
+        )
+    if lever_report:
+        sections.append(
+            f"Contended tables written by `{target}`:\n\n" + "\n".join(lever_report) + "\n\n"
+            "A table with several writers is coupling an import graph cannot see -- changing "
+            "its shape can break a file that never imports this one."
+        )
+    body = "\n\n---\n\n".join(sections)
     out = {"hookSpecificOutput": {"hookEventName": event_name, "additionalContext": body}}
     if event_name == "PreToolUse":
         out["hookSpecificOutput"]["permissionDecision"] = "allow"
+        total = len(report) + len(lever_report)
         out["hookSpecificOutput"]["permissionDecisionReason"] = (
-            f"{len(report)} name(s) already defined elsewhere; proceeding, see context"
+            f"{total} note(s) about `{target}`; proceeding, see context"
         )
     print(json.dumps(out, ensure_ascii=False))
 
@@ -153,9 +211,20 @@ def main() -> int:
             return 0
 
         report = check(text, suffix, root, rel)
-        if report:
-            emit(event_name, report, rel)
-            _log(f"guard {tool} {rel}: {len(report)} duplicate name(s)")
+
+        summary = load_levers_summary(root)
+        old_text = ""
+        if summary:
+            try:
+                old_text = Path(file_path).read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                old_text = ""
+        lever_report = structure_check(text, suffix, summary, rel, old_text)
+
+        if report or lever_report:
+            emit(event_name, report, lever_report, rel)
+            _log(f"guard {tool} {rel}: {len(report)} duplicate name(s), "
+                 f"{len(lever_report)} contended lever(s)")
         return 0
     except Exception as e:  # never break Claude Code
         try:

@@ -324,6 +324,86 @@ def test_build_forces_a_full_rescan_when_the_on_disk_index_predates_the_is_test_
     assert idx["files"]["src/a.js"]["is_test"] is False
 
 
+# --------------------------------------------------------------------------- compact levers summary (guard input)
+
+def test_build_writes_a_levers_summary_alongside_the_index(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    (repo / "test").mkdir(parents=True)
+    (repo / "src" / "a.js").write_text(
+        "db.exec('INSERT INTO positions (id) VALUES (1)');\n", encoding="utf-8")
+    (repo / "src" / "b.js").write_text(
+        "db.exec('UPDATE positions SET qty = 1');\n", encoding="utf-8")
+    (repo / "test" / "c.test.js").write_text(
+        "db.exec('UPDATE positions SET qty = 1');\n", encoding="utf-8")
+
+    wiki_structure.build(repo, changed=None)
+    summary = wiki_structure.load_levers_summary(repo)
+
+    assert summary == {"positions": [3, 2]}
+
+
+def test_levers_summary_covers_every_writer_not_just_the_contended_ones():
+    # build_levers_summary() must not apply contended()'s >= 2 threshold --
+    # the guard applies its own threshold at check time (guard_min_lever_writers),
+    # so a table with a single writer still needs an entry to compare against.
+    idx = {"v": wiki_structure.INDEX_VERSION, "files": {
+        "src/a.js": {"imports": [], "writes": ["runs"], "env": [], "emits": [], "is_test": False},
+    }}
+    assert wiki_structure.build_levers_summary(idx) == {"runs": [1, 1]}
+
+
+def test_levers_summary_counts_test_and_non_test_writers_separately():
+    idx = {"v": wiki_structure.INDEX_VERSION, "files": {
+        "src/a.js": {"imports": [], "writes": ["positions"], "env": [], "emits": [], "is_test": False},
+        "test/b.test.js": {"imports": [], "writes": ["positions"], "env": [], "emits": [], "is_test": True},
+        "src/c.js": {"imports": [], "writes": ["positions"], "env": [], "emits": [], "is_test": False},
+    }}
+    assert wiki_structure.build_levers_summary(idx) == {"positions": [3, 2]}
+
+
+def test_load_levers_summary_is_empty_when_no_summary_has_ever_been_written(tmp_path):
+    assert wiki_structure.load_levers_summary(tmp_path) == {}
+
+
+def test_load_levers_summary_is_empty_on_a_version_mismatch(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    (repo / "src" / "a.js").write_text(
+        "db.exec('INSERT INTO positions (id) VALUES (1)');\n", encoding="utf-8")
+    wiki_structure.build(repo, changed=None)
+
+    stale = {"v": wiki_structure.INDEX_VERSION - 1, "levers": {"positions": [1, 1]}}
+    wiki_structure.levers_summary_path(repo).write_text(json.dumps(stale), encoding="utf-8")
+
+    assert wiki_structure.load_levers_summary(repo) == {}
+
+
+def test_load_levers_summary_is_empty_on_malformed_json(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    wiki_structure.INDEX_DIR.mkdir(parents=True, exist_ok=True)
+    wiki_structure.levers_summary_path(repo).write_text("{not json", encoding="utf-8")
+
+    assert wiki_structure.load_levers_summary(repo) == {}
+
+
+def test_levers_summary_is_much_smaller_than_the_full_index(tmp_path):
+    # The whole point: the guard must be able to load this on every Write
+    # without paying for the full index's size.
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    for i in range(30):
+        (repo / "src" / f"f{i}.js").write_text(
+            f"db.exec('INSERT INTO t{i} (id) VALUES (1)');\n"
+            "db.exec('INSERT INTO shared (id) VALUES (1)');\n", encoding="utf-8")
+    wiki_structure.build(repo, changed=None)
+
+    index_bytes = wiki_structure.index_path(repo).stat().st_size
+    summary_bytes = wiki_structure.levers_summary_path(repo).stat().st_size
+    assert summary_bytes < index_bytes / 3
+
+
 # --------------------------------------------------------------------------- incremental build vs. deletions
 
 def _git(repo, *args):
