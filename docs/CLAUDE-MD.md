@@ -49,7 +49,7 @@ git hooks, or the symbol index. Everything goes through `wikictl.py`.
 
 **"Read before re-deriving"** is the one that pays for the whole system. Without it a model treats the injected catalog as decoration and re-analyses from scratch anyway — the catalog is a list of titles, and nothing compels opening them. Naming the specific failure modes (architecture, old diagnoses, metrics, rejected options) works better than a general "use the wiki", because those are the four things assistants actually redo.
 
-**"Look at the structure before changing it"** covers the coupling a name check cannot see. On the repository these docs quote, `ledger.js` is imported by 35 files while 65 write to the ten tables it owns, and only 15 do both — so fifty files depend on its schema without any import to find them by. `levers` is the only cheap way to ask that question before a migration.
+**"Look at the structure before changing it"** covers the coupling a name check cannot see. On the repository these docs quote, `ledger.js` is imported by 11 non-test files, while 21 other non-test files write to the ten tables it owns — with no overlap at all. Every one of those 21 depends on its schema and none of them can be found by following imports. `levers` is the cheap way to ask that before a migration.
 
 **"Check before writing code"** exists because the guard is a net, not a plan. It fires when a file is being written, which is already late: the model has composed the helper and now has to undo it. A `where` call before writing costs one tool call and avoids the rework. Keep both — the instruction for the disciplined path, the guard for when discipline slips.
 

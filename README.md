@@ -82,15 +82,18 @@ drift the way a generated snapshot does. `wikictl map` prints the shape, `wikict
 how two files connect, `wikictl levers positions` lists every writer of one table.
 
 The second half is the half an import graph cannot give you. On the same repository,
-`src/execution/ledger.js` is imported by 35 files — and 65 files write to the ten tables it
-owns. Only 15 of them do both. **Fifty files reach its tables without ever importing it**, which
-is exactly the coupling that breaks when you change a schema:
+`src/execution/ledger.js` is imported by 11 non-test files. Twenty-one other non-test files
+write to the ten tables it owns — and **not one of them imports it**. The import graph shows you
+the eleven; the twenty-one that break when you change a column are invisible to it.
 
 ```
-signal_records   56 writers
+signal_records   56 writers   (17 outside the test suite)
 outcomes              23
 positions               22
 ```
+
+Counts include tests, which is usually what you want before a migration and occasionally not —
+`levers` prints the paths, so you can see which is which.
 
 Static requires and literal SQL only. Dynamic requires, ORM calls and computed table names are
 invisible to this index, and every command that prints from it says so.
