@@ -2,6 +2,8 @@
 
 **A per-project memory that writes itself — and a guard that stops your assistant from rebuilding what already exists.**
 
+*English · [Русский](README.ru.md)*
+
 Claude Code forgets everything between sessions. You re-explain the same architecture, re-derive the same diagnosis, and re-discover the constraint you already hit three weeks ago. Then, inside a session, it writes a helper that already exists in twenty other files — because nothing answered *"does this exist?"* at the moment it mattered.
 
 This fixes both, from the same set of hooks, using the model you are already paying for.
@@ -18,6 +20,24 @@ your commits  ────►  structure index ──►  wikictl map / path / l
                                           at session start: what everything depends on, and
                                           which tables have more than one writer
 ```
+
+---
+
+## Contents
+
+| | |
+| --- | --- |
+| [Two problems, measured](#two-problems-measured) | what goes wrong, in numbers from a real repository |
+| [What it does](#what-it-does) | the four moving parts: record, ingest, guard, map |
+| [Install](#install) | two commands, plus how to seed history |
+| [What a page looks like](#what-a-page-looks-like) | a real generated page and the vault layout |
+| [Commands](#commands) | every verb in one table |
+| [Design notes](#design-notes) | why capture never depends on a model |
+| [Works alongside a language server (Serena)](#works-alongside-a-language-server-serena) | what each one can and cannot answer |
+| [Configuration](#configuration) | the config file and what each key changes |
+| [What it puts on your machine](#what-it-puts-on-your-machine) | every path it touches, and how to undo it |
+| [Security](#security) | the journal is an attack surface; what is done about it |
+| [Honest limits](#honest-limits) | what it does not do |
 
 ---
 
@@ -197,7 +217,7 @@ Full reference: [docs/CLI.md](docs/CLI.md). Architecture: [docs/ARCHITECTURE.md]
 
 **The index is regex-based on purpose.** A language server knows more, but it needs a daemon and a warm-up and cannot be queried from a git hook. This has to answer during a `PreToolUse` call. Full build of 4400 files: ~2 s. Incremental update after a commit: only the files in that commit. JavaScript, TypeScript and Python are recognised.
 
-**Latency is measured, not assumed.** The guard costs ~226 ms per `Write` on Windows, of which 182 ms is Python interpreter start; the index work is the rest. Resolving the repository by walking up for `.git` rather than spawning `git rev-parse` saved 30 ms of that. On `Write` this is a handful of calls per session. On `Edit` it would be every edit, which is why `guard_on_edit` defaults to off.
+**Latency is measured, not assumed.** On Windows, against a 4400-file repository, the guard costs ~115 ms per `Write` — of which 82 ms is Python interpreter start and 32 ms is the actual index work. Resolving the repository by walking up for `.git` rather than spawning `git rev-parse` saved 30 ms of that. Adding the structure index did not move this number, because the guard never loads it. On `Write` this is a handful of calls per session; on `Edit` it would be every edit, which is why `guard_on_edit` defaults to off.
 
 **The ingest cannot feed itself.** It writes into the vault, and the recorder ignores any session whose working directory is inside the vault or the Claude config home. Without that, every ingest would produce a block describing the ingest.
 
@@ -279,7 +299,8 @@ The journal holds your prompts and shell commands verbatim, and the ingest shows
 
 ## Honest limits
 
-- **It is not a code map.** It records decisions and findings. "Where is the function that does X" is answered by `where`, not by the pages.
+- **The pages are not a code map.** They record decisions and findings. "Where is the function that does X" is answered by `where`; "what depends on this" by `map` and `levers` — not by the prose.
+- **The structure index is a parser, not a compiler.** It sees static requires and literal SQL. A table name built at runtime, an ORM call, a worker started by a process manager — all invisible. Treat a lever count as a floor, never a total.
 - **Page quality tracks whichever model ran.** A small local model stays factual about what changed but can over-explain why. The per-project `log.md` names the model for every pass, so weak pages are attributable.
 - **A project appears in the vault only when its first page is written.** A repository where nothing durable has happened stays absent by design.
 - **The guard compares bodies textually, not semantically.** Two functions that do the same thing with different code read as different. Normalisation strips comments and whitespace only; renaming a parameter is enough to hide a copy. `dupes --kind renamed` shows what it does catch.
