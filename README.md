@@ -115,7 +115,8 @@ positions        22
 ```
 
 Counts include tests, which is usually what you want before a migration and occasionally not —
-`levers` prints the paths, so you can see which is which.
+`levers` and `map` always print the split (`signal_records: 56 file(s) (17 outside tests)`), and
+`--no-tests` narrows the listing itself to the non-test writers.
 
 Static requires and literal SQL only. Dynamic requires, ORM calls and computed table names are
 invisible to this index, and every command that prints from it says so.

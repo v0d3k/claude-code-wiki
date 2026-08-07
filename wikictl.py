@@ -564,6 +564,8 @@ def cmd_map(args) -> int:
         cmd += ["--repo", args.repo]
     if args.write:
         cmd.append("--write")
+    if args.no_tests:
+        cmd.append("--no-tests")
     return subprocess.run(cmd).returncode
 
 
@@ -579,6 +581,8 @@ def cmd_levers(args) -> int:
            "--limit", str(args.limit)]
     if args.repo:
         cmd += ["--repo", args.repo]
+    if args.no_tests:
+        cmd.append("--no-tests")
     return subprocess.run(cmd).returncode
 
 
@@ -830,6 +834,8 @@ def main() -> int:
     p.add_argument("--top", type=int, default=10)
     p.add_argument("--rebuild", action="store_true", help="rescan before printing")
     p.add_argument("--write", action="store_true", help="also write module pages into the vault")
+    p.add_argument("--no-tests", dest="no_tests", action="store_true",
+                   help="rank and list contended levers by non-test writers only")
     p.set_defaults(func=cmd_map)
 
     p = sub.add_parser("path", help="import path between two files")
@@ -842,6 +848,8 @@ def main() -> int:
     p.add_argument("name")
     p.add_argument("--repo")
     p.add_argument("--limit", type=int, default=20)
+    p.add_argument("--no-tests", dest="no_tests", action="store_true",
+                   help="list non-test writers only (the header count always shows both)")
     p.set_defaults(func=cmd_levers)
 
     p = sub.add_parser("add")

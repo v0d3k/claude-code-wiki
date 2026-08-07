@@ -51,6 +51,45 @@ token = os.environ["OZON_TOKEN"]
     assert facts["env"] == {"OZON_TOKEN"}
 
 
+# --------------------------------------------------------------------------- is_test_file
+
+def test_is_test_file_recognizes_test_directory_segments():
+    assert wiki_structure.is_test_file("test/foo.js")
+    assert wiki_structure.is_test_file("tests/foo.py")
+    assert wiki_structure.is_test_file("packages/a/__tests__/foo.js")
+    assert wiki_structure.is_test_file("spec/foo.js")
+    assert wiki_structure.is_test_file("packages/a/test/nested/foo.js")
+
+
+def test_is_test_file_recognizes_dot_test_and_dot_spec_filenames():
+    assert wiki_structure.is_test_file("src/foo.test.js")
+    assert wiki_structure.is_test_file("src/foo.spec.ts")
+    assert not wiki_structure.is_test_file("src/footest.js")
+
+
+def test_is_test_file_recognizes_python_test_prefix_and_suffix():
+    assert wiki_structure.is_test_file("src/test_foo.py")
+    assert wiki_structure.is_test_file("src/foo_test.py")
+    assert not wiki_structure.is_test_file("src/testing_utils.py")
+
+
+def test_is_test_file_does_not_flag_a_shipped_file_that_merely_contains_test_in_its_name():
+    # data/_refactor-tests.cjs is a real path in the repository this predicate is
+    # measured against: a one-off migration script, not a test file. A bare
+    # "test" substring anywhere in the name would misclassify it, and this same
+    # shape (a hyphenated "-tests" or "-test" tail with no directory segment and
+    # no dot-test/dot-spec marker) recurs across that repo's stress-test and
+    # backtest scripts.
+    assert not wiki_structure.is_test_file("data/_refactor-tests.cjs")
+    assert not wiki_structure.is_test_file("scripts/run-strategy-stress-test.cjs")
+    assert not wiki_structure.is_test_file("scripts/backtest-fetch-klines.cjs")
+    assert not wiki_structure.is_test_file("scripts/liquidity-ground-truth-test.cjs")
+
+
+def test_is_test_file_normalizes_windows_backslashes():
+    assert wiki_structure.is_test_file("packages\\a\\test\\foo.js")
+
+
 # The JS fixture above only passes the import assertion by luck: its SQL says
 # uppercase FROM against an unquoted table, and the import pattern is
 # case-sensitive. Lowercase SQL against a quoted identifier is the same clause
@@ -134,6 +173,42 @@ def test_writers_env_lookup_is_case_sensitive():
     assert wiki_structure.writers(idx, "DB_BUSY_TIMEOUT_MS") == ["e.js"]
 
 
+# --------------------------------------------------------------------------- test-aware writers() / contended()
+
+IDX_TESTAWARE = {"v": wiki_structure.INDEX_VERSION, "files": {
+    "src/a.js": {"imports": [], "writes": ["positions"], "env": [], "emits": [], "is_test": False},
+    "test/b.test.js": {"imports": [], "writes": ["positions"], "env": [], "emits": [], "is_test": True},
+    "src/c.js": {"imports": [], "writes": ["positions"], "env": [], "emits": [], "is_test": False},
+}}
+
+
+def test_writers_default_includes_test_files_same_as_before_the_flag_existed():
+    # The default must not silently change existing behaviour: a caller who
+    # does not know about exclude_tests gets exactly the old, all-writers list.
+    assert wiki_structure.writers(IDX_TESTAWARE, "positions") == ["src/a.js", "src/c.js", "test/b.test.js"]
+
+
+def test_writers_exclude_tests_true_drops_test_files():
+    assert wiki_structure.writers(IDX_TESTAWARE, "positions", exclude_tests=True) == ["src/a.js", "src/c.js"]
+
+
+def test_contended_default_includes_test_files_same_as_before_the_flag_existed():
+    rows = dict(wiki_structure.contended(IDX_TESTAWARE))
+    assert rows["positions"] == ["src/a.js", "src/c.js", "test/b.test.js"]
+
+
+def test_contended_exclude_tests_true_drops_test_files_and_reapplies_the_threshold():
+    # Excluding tests can drop a lever below the minimum-writer threshold
+    # entirely -- outcomes has 2 writers, but only 1 once tests are excluded,
+    # so it must disappear from the result, not just shrink to a 1-item list.
+    idx = {"v": wiki_structure.INDEX_VERSION, "files": {
+        "src/a.js": {"imports": [], "writes": ["outcomes"], "env": [], "emits": [], "is_test": False},
+        "test/b.test.js": {"imports": [], "writes": ["outcomes"], "env": [], "emits": [], "is_test": True},
+    }}
+    assert dict(wiki_structure.contended(idx))["outcomes"] == ["src/a.js", "test/b.test.js"]
+    assert dict(wiki_structure.contended(idx, exclude_tests=True)) == {}
+
+
 def test_duplicate_import_specifiers_resolve_to_one_edge(tmp_path):
     # fan_in counts entries in each file's "imports" list, so the ranking is
     # only sound if that list can never hold the same resolved target twice.
@@ -193,6 +268,60 @@ def test_describe_path_reports_every_unknown_endpoint_in_one_run():
     code, lines = wiki_structure.describe_path(IDX_PATH, "nope1.js", "nope2.js")
     assert code == 1
     assert len(lines) == 2
+
+
+# --------------------------------------------------------------------------- is_test flag storage and version bump
+
+def test_build_full_scan_stores_the_is_test_flag_on_each_file(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    (repo / "test").mkdir(parents=True)
+    (repo / "src" / "a.js").write_text(
+        "db.exec('INSERT INTO runs (id) VALUES (1)');\n", encoding="utf-8")
+    (repo / "test" / "a.test.js").write_text(
+        "db.exec('INSERT INTO runs (id) VALUES (1)');\n", encoding="utf-8")
+
+    idx = wiki_structure.build(repo, changed=None)
+
+    assert idx["files"]["src/a.js"]["is_test"] is False
+    assert idx["files"]["test/a.test.js"]["is_test"] is True
+
+
+def test_build_incremental_scan_also_stores_the_is_test_flag(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / "test").mkdir(parents=True)
+    (repo / "test" / "b.test.js").write_text(
+        "db.exec('INSERT INTO runs (id) VALUES (1)');\n", encoding="utf-8")
+    wiki_structure.build(repo, changed=None)
+
+    (repo / "test" / "b.test.js").write_text(
+        "db.exec('INSERT INTO runs (id) VALUES (2)');\n", encoding="utf-8")
+    idx = wiki_structure.build(repo, changed=["test/b.test.js"])
+
+    assert idx["files"]["test/b.test.js"]["is_test"] is True
+
+
+def test_build_forces_a_full_rescan_when_the_on_disk_index_predates_the_is_test_flag(tmp_path):
+    # The version check in build() already forces a full rebuild whenever the
+    # on-disk `v` does not match INDEX_VERSION -- this pins that bumping
+    # INDEX_VERSION for the is_test flag actually exercises that existing path,
+    # rather than silently patching a shape that has no is_test key at all.
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    (repo / "src" / "a.js").write_text("require('./b');\n", encoding="utf-8")
+    (repo / "src" / "b.js").write_text("module.exports = {};\n", encoding="utf-8")
+    (repo / "src" / "c.js").write_text("const t = process.env.SOME_KEY;\n", encoding="utf-8")
+
+    stale = {"v": wiki_structure.INDEX_VERSION - 1,
+             "files": {"src/a.js": {"imports": ["src/b.js"], "writes": [], "env": [], "emits": []}}}
+    wiki_structure.INDEX_DIR.mkdir(parents=True, exist_ok=True)
+    (wiki_structure.INDEX_DIR / f"{repo.name}.json").write_text(json.dumps(stale), encoding="utf-8")
+
+    idx = wiki_structure.build(repo, changed=["src/a.js"])
+
+    assert idx["v"] == wiki_structure.INDEX_VERSION
+    assert "src/c.js" in idx["files"]  # only reachable via a full scan
+    assert idx["files"]["src/a.js"]["is_test"] is False
 
 
 # --------------------------------------------------------------------------- incremental build vs. deletions
@@ -405,7 +534,7 @@ def test_atomic_write_leaves_no_tmp_file_and_writes_the_content(tmp_path):
     assert not target.with_suffix(target.suffix + ".tmp").exists()
 
 
-IDX_WM = {"v": 1, "files": {
+IDX_WM = {"v": wiki_structure.INDEX_VERSION, "files": {
     "src/a.js": {"imports": [], "writes": ["t1"], "env": [], "emits": []},
     "src/b.js": {"imports": ["src/a.js"], "writes": [], "env": [], "emits": []},
 }}
@@ -518,3 +647,72 @@ def test_cmd_map_write_creates_pages_under_the_isolated_vault(tmp_path, monkeypa
     assert wiki_structure.cmd_map(args) == 0
     assert (project_dir / "wiki" / "entities" / "a.md").exists()
     assert not (project_dir / "wiki" / "entities" / "b.md").exists()  # zero fan-in, not ranked
+
+
+# --------------------------------------------------------------------------- --no-tests (cmd_levers / cmd_map)
+
+def _write_index(repo, idx: dict) -> None:
+    wiki_structure.INDEX_DIR.mkdir(parents=True, exist_ok=True)
+    (wiki_structure.INDEX_DIR / f"{repo.name}.json").write_text(json.dumps(idx), encoding="utf-8")
+
+
+def test_cmd_levers_default_output_always_shows_the_split(tmp_path, capsys):
+    # "positions: 22 file(s) (6 outside tests)" is more useful than either
+    # number alone -- the header carries both, regardless of --no-tests.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _write_index(repo, IDX_TESTAWARE)
+
+    args = argparse.Namespace(repo=str(repo), name="positions", limit=20, no_tests=False)
+    assert wiki_structure.cmd_levers(args) == 0
+    out = capsys.readouterr().out
+    assert "positions: 3 file(s) (2 outside tests)" in out
+    assert "test/b.test.js" in out  # default listing still includes the test writer
+
+
+def test_cmd_levers_no_tests_filters_the_listed_files_but_keeps_the_split_header(tmp_path, capsys):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _write_index(repo, IDX_TESTAWARE)
+
+    args = argparse.Namespace(repo=str(repo), name="positions", limit=20, no_tests=True)
+    assert wiki_structure.cmd_levers(args) == 0
+    out = capsys.readouterr().out
+    assert "positions: 3 file(s) (2 outside tests)" in out
+    assert "test/b.test.js" not in out
+    assert "src/a.js" in out and "src/c.js" in out
+
+
+IDX_MAP_TESTAWARE = {"v": wiki_structure.INDEX_VERSION, "files": {
+    "src/a.js": {"imports": [], "writes": ["outcomes"], "env": [], "emits": [], "is_test": False},
+    "test/b.test.js": {"imports": [], "writes": ["outcomes"], "env": [], "emits": [], "is_test": True},
+    "src/c.js": {"imports": [], "writes": ["positions"], "env": [], "emits": [], "is_test": False},
+    "src/d.js": {"imports": [], "writes": ["positions"], "env": [], "emits": [], "is_test": False},
+    "test/e.test.js": {"imports": [], "writes": ["positions"], "env": [], "emits": [], "is_test": True},
+}}
+
+
+def test_cmd_map_default_shows_the_split_for_every_contended_lever(tmp_path, capsys):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _write_index(repo, IDX_MAP_TESTAWARE)
+
+    args = argparse.Namespace(repo=str(repo), top=10, write=False, no_tests=False)
+    assert wiki_structure.cmd_map(args) == 0
+    out = capsys.readouterr().out
+    assert "outcomes (1 outside tests)" in out
+    assert "positions (2 outside tests)" in out
+
+
+def test_cmd_map_no_tests_reapplies_the_threshold_after_excluding_tests(tmp_path, capsys):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _write_index(repo, IDX_MAP_TESTAWARE)
+
+    args = argparse.Namespace(repo=str(repo), top=10, write=False, no_tests=True)
+    assert wiki_structure.cmd_map(args) == 0
+    out = capsys.readouterr().out
+    levers_section = out.split("shared levers")[1]
+    assert "outcomes" not in levers_section  # only 1 non-test writer left, below the minimum-2 threshold
+    assert "positions" in levers_section
+    assert "test/e.test.js" not in levers_section  # test writer dropped from the listed files too

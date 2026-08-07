@@ -97,16 +97,28 @@ re-parses only the files in that commit. A format change triggers a full rebuild
 ## map / path / levers
 
 ```
-map [--repo PATH] [--top N] [--rebuild] [--write]   # fan-in, fan-out, contended levers
-path SOURCE TARGET [--repo PATH]                    # import route between two repo-relative files
-levers NAME [--repo PATH] [--limit N]               # who writes this table, reads this env key,
-                                                    #   or emits this event
+map [--repo PATH] [--top N] [--rebuild] [--write] [--no-tests]   # fan-in, fan-out, contended levers
+path SOURCE TARGET [--repo PATH]                                 # import route between two repo-relative files
+levers NAME [--repo PATH] [--limit N] [--no-tests]                # who writes this table, reads this env key,
+                                                                  #   or emits this event
 ```
 
 `--rebuild` rescans before printing; normally the post-commit hook keeps the index current.
 `--write` creates or refreshes an entity page per top module, replacing only the block between
 `<!-- structure:begin -->` and `<!-- structure:end -->`, so hand-written prose above it survives
 regeneration. A page whose markers are malformed is left untouched rather than rewritten.
+
+A writer count on its own conflates two different facts: a table with 22 writers where 16 are
+tests means 6 places actually ship code against its shape, and the other 16 just fail loudly in
+CI. `levers` always prints both -- `positions: 22 file(s) (6 outside tests)` -- and `--no-tests`
+narrows the listed paths below that header to the 6. `map`'s "shared levers" section shows the
+same split per lever; with `--no-tests` the contention threshold (>= 2 writers) is reapplied to
+the non-test count alone, so a lever that only looked contended because of its test suite drops
+out of the list entirely rather than shrinking to one file. A file counts as a test by the same
+rule everywhere in this index: a `test/`, `tests/`, `__tests__/` or `spec/` path segment, a
+`.test.` or `.spec.` filename marker, or Python's `test_*.py` / `*_test.py` -- a bare "test"
+substring elsewhere in a name (a backtest script, a one-off `*-tests.cjs` migration) does not
+count.
 
 `path` distinguishes the two ways it can fail: an endpoint that is not in the index at all (with
 near-match suggestions, since a typo is the likelier case in a large repo) versus two files that

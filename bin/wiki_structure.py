@@ -31,7 +31,7 @@ from wiki_paths import STATE_DIR, load_config  # noqa: E402
 from wiki_symbols import SKIP_DIRS, repo_root  # noqa: E402
 
 INDEX_DIR = STATE_DIR / "structure"
-INDEX_VERSION = 1
+INDEX_VERSION = 2  # v2 adds the is_test flag per file (see is_test_file())
 
 JS_SUFFIXES = {".js", ".cjs", ".mjs", ".ts", ".tsx", ".jsx"}
 PY_SUFFIXES = {".py"}
@@ -55,6 +55,37 @@ EMIT = re.compile(r"\.emit\(\s*['\"]([A-Za-z_][\w.:-]*)['\"]")
 
 # UPDATE ... SET on its own line makes "SET" look like a table name.
 NOT_A_TABLE = {"set", "from", "where", "select", "values", "into", "table"}
+
+TEST_DIR_SEGMENTS = {"test", "tests", "__tests__", "spec"}
+
+
+def is_test_file(rel: str) -> bool:
+    """Repo-relative path -> True if it looks like a test file, not shipped code.
+
+    Four checks, all narrow on purpose: a test/tests/__tests__/spec path segment;
+    `.test.` or `.spec.` in the filename (Jest/Mocha/Vitest convention); Python's
+    `test_*.py` and `*_test.py`. A bare "test" substring anywhere in the name is
+    deliberately NOT enough -- `data/_refactor-tests.cjs` is a real shipped script
+    in the repository this was measured against, and a hyphenated `-test`/`-tests`
+    tail with no directory segment and no dot-marker is common there (stress-test
+    and backtest scripts). Matching is case-sensitive on the dot-markers and the
+    Python prefix/suffix (source conventions are), case-insensitive on directory
+    segments (Windows paths vary in case more than filenames do).
+    """
+    norm = rel.replace("\\", "/")
+    parts = [p for p in norm.split("/") if p]
+    if not parts:
+        return False
+    segments, filename = parts[:-1], parts[-1]
+    if any(seg.lower() in TEST_DIR_SEGMENTS for seg in segments):
+        return True
+    if ".test." in filename or ".spec." in filename:
+        return True
+    if filename.endswith(".py"):
+        stem = filename[:-3]
+        if stem.startswith("test_") or stem.endswith("_test"):
+            return True
+    return False
 
 
 def _fired(pattern: re.Pattern, text: str) -> set[str]:
@@ -155,6 +186,7 @@ def build(root: Path, changed: list[str] | None = None) -> dict:
             rel = str(f.relative_to(root)).replace("\\", "/")
             facts = scan_file(f, root)
             if any(facts.values()):
+                facts["is_test"] = is_test_file(rel)
                 files[rel] = facts
     else:
         # diff-tree lists deletions and renames-away too, not just edits: a
@@ -172,6 +204,7 @@ def build(root: Path, changed: list[str] | None = None) -> dict:
             if f.is_file() and f.suffix in JS_SUFFIXES | PY_SUFFIXES:
                 facts = scan_file(f, root)
                 if any(facts.values()):
+                    facts["is_test"] = is_test_file(rel)
                     files[rel] = facts
             else:
                 gone.add(rel)
@@ -236,7 +269,7 @@ def shortest_path(idx: dict, src: str, dst: str) -> list[str] | None:
     return None
 
 
-def writers(idx: dict, lever: str) -> list[str]:
+def writers(idx: dict, lever: str, exclude_tests: bool = False) -> list[str]:
     """Files that write the named table, read the named env key, or emit the event.
 
     One CLI verb for three different kinds of coupling, on purpose -- callers
@@ -245,10 +278,17 @@ def writers(idx: dict, lever: str) -> list[str]:
     (see extract()), so table lookups match any case; env keys and event names
     are stored exactly as written in the source, so those two match only the
     exact case given here.
+
+    exclude_tests defaults to False -- a caller who does not pass it gets
+    exactly the old, all-writers list. A count that silently dropped test
+    files by default would be a different (if arguably more "honest") number
+    than every caller of this function has relied on so far; opt in instead.
     """
     key = lever.lower()
     out = []
     for rel, facts in sorted(idx.get("files", {}).items()):
+        if exclude_tests and facts.get("is_test"):
+            continue
         if (key in [w.lower() for w in facts.get("writes", [])]
                 or lever in facts.get("env", [])
                 or lever in facts.get("emits", [])):
@@ -256,10 +296,19 @@ def writers(idx: dict, lever: str) -> list[str]:
     return out
 
 
-def contended(idx: dict, minimum: int = 2) -> list[tuple[str, list[str]]]:
-    """Levers with more than one writer, worst first."""
+def contended(idx: dict, minimum: int = 2, exclude_tests: bool = False) -> list[tuple[str, list[str]]]:
+    """Levers with more than one writer, worst first.
+
+    exclude_tests defaults to False, same reasoning as writers(). When True,
+    the threshold is reapplied AFTER dropping test writers -- a lever with two
+    writers, one of them a test, no longer counts as contended once tests are
+    excluded; it must disappear from the result rather than shrink to a
+    single-file list that still passed the >= minimum check on the old count.
+    """
     by_lever: dict[str, list[str]] = defaultdict(list)
     for rel, facts in idx.get("files", {}).items():
+        if exclude_tests and facts.get("is_test"):
+            continue
         for w in facts.get("writes", []):
             by_lever[w].append(rel)
     rows = [(k, sorted(v)) for k, v in by_lever.items() if len(v) >= minimum]
@@ -340,11 +389,19 @@ def cmd_map(args) -> int:
     print("\nmost dependent (fan-out):")
     for rel, c in sorted(fo.items(), key=lambda kv: -kv[1])[:args.top]:
         print(f"  {c:4}  {rel}")
-    rows = contended(idx)
+    no_tests = getattr(args, "no_tests", False)
+    rows = contended(idx, exclude_tests=no_tests)
     if rows:
-        print("\nshared levers with more than one writer:")
+        files_idx = idx.get("files", {})
+        header = ("\nshared levers with more than one writer outside tests:" if no_tests else
+                   "\nshared levers with more than one writer:")
+        print(header)
         for lever, files in rows[:args.top]:
-            print(f"  {len(files):4}  {lever}: {', '.join(files[:3])}"
+            # Already excluded and re-thresholded on non-test writers alone
+            # when no_tests -- the parenthetical would just repeat len(files).
+            suffix = "" if no_tests else (
+                f" ({sum(1 for rel in files if not files_idx.get(rel, {}).get('is_test'))} outside tests)")
+            print(f"  {len(files):4}  {lever}{suffix}: {', '.join(files[:3])}"
                   f"{' …' if len(files) > 3 else ''}")
     if getattr(args, "write", False):
         from wiki_paths import vault
@@ -383,11 +440,13 @@ def cmd_levers(args) -> int:
     if not files:
         print(f"{args.name}: no file writes, reads or emits this")
         return 1
-    print(f"{args.name}: {len(files)} file(s)")
-    for rel in files[:args.limit]:
+    non_test_files = writers(idx, name, exclude_tests=True)
+    shown = non_test_files if getattr(args, "no_tests", False) else files
+    print(f"{args.name}: {len(files)} file(s) ({len(non_test_files)} outside tests)")
+    for rel in shown[:args.limit]:
         print(f"  {rel}")
-    if len(files) > args.limit:
-        print(f"  ... and {len(files) - args.limit} more")
+    if len(shown) > args.limit:
+        print(f"  ... and {len(shown) - args.limit} more")
     return 0
 
 
@@ -550,6 +609,8 @@ def main() -> int:
     p.add_argument("--top", type=int, default=10)
     p.add_argument("--write", action="store_true",
                    help="create or refresh entity pages for the top modules")
+    p.add_argument("--no-tests", dest="no_tests", action="store_true",
+                   help="rank and list contended levers by non-test writers only")
     p.set_defaults(func=cmd_map)
 
     p = sub.add_parser("path")
@@ -562,6 +623,8 @@ def main() -> int:
     p.add_argument("name")
     p.add_argument("--repo")
     p.add_argument("--limit", type=int, default=20)
+    p.add_argument("--no-tests", dest="no_tests", action="store_true",
+                   help="list non-test writers only (the header count always shows both)")
     p.set_defaults(func=cmd_levers)
 
     args = ap.parse_args()

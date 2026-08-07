@@ -47,6 +47,28 @@ def test_structure_orientation_lists_fan_in_and_contended_levers(tmp_path):
     assert "wikictl map" in text and "wikictl levers" in text and "wikictl path" in text
 
 
+def test_structure_orientation_shows_the_non_test_writer_count_per_lever(tmp_path):
+    # The moment this line matters is session start, before the model has
+    # touched anything -- it must be as honest as the CLI's own `map`/`levers`
+    # output, not just "written from N file(s)" with N counting test files
+    # that will fail loudly rather than break something that ships.
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True, exist_ok=True)
+    (repo / "test").mkdir(parents=True, exist_ok=True)
+    (repo / "src" / "a.js").write_text(
+        "require('./db');\ndb.exec('INSERT INTO positions (id) VALUES (1)');\n", encoding="utf-8")
+    (repo / "src" / "b.js").write_text(
+        "require('./db');\ndb.exec('UPDATE positions SET qty = 1');\n", encoding="utf-8")
+    (repo / "test" / "c.test.js").write_text(
+        "db.exec('UPDATE positions SET qty = 1');\n", encoding="utf-8")
+    (repo / "src" / "db.js").write_text("module.exports = {};\n", encoding="utf-8")
+    wiki_structure.build(repo, changed=None)
+
+    text = wiki_context.structure_orientation(repo)
+
+    assert "written from 3 file(s) (2 outside tests)" in text
+
+
 def test_structure_orientation_respects_orient_modules_and_orient_levers_limits(tmp_path):
     repo = tmp_path / "repo"
     _seed_index(repo)

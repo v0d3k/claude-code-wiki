@@ -74,8 +74,11 @@ def structure_orientation(root) -> str:
         lines += [f"- `{rel}` — imported by {c}" for rel, c in fi]
     rows = contended(idx)[:int(cfg.get("orient_levers", 5))]
     if rows:
+        files_idx = idx.get("files", {})
         lines += ["", "Shared state with more than one writer:"]
-        lines += [f"- `{lever}` — written from {len(files)} file(s)" for lever, files in rows]
+        for lever, files in rows:
+            non_test_n = sum(1 for rel in files if not files_idx.get(rel, {}).get("is_test"))
+            lines.append(f"- `{lever}` — written from {len(files)} file(s) ({non_test_n} outside tests)")
     lines += ["", "`wikictl map` for the rest, `wikictl levers <name>` for one resource, "
               "`wikictl path A B` for how two files connect. Static requires and literal SQL "
               "only — dynamic requires and ORM calls are invisible to it."]

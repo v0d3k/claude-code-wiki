@@ -81,3 +81,34 @@ def test_path_cli_forwards_source_and_target_positionally(monkeypatch):
     assert wikictl.main() == 0
     cmd = calls[-1]
     assert cmd[-2:] == ["src\\a.js", "src\\b.js"]
+
+
+def test_levers_cli_forwards_no_tests(monkeypatch):
+    calls = _fake_run(monkeypatch)
+    monkeypatch.setattr(sys, "argv", ["wikictl.py", "levers", "signal_records", "--no-tests"])
+    assert wikictl.main() == 0
+    assert "--no-tests" in calls[-1]
+
+
+def test_levers_cli_without_no_tests_does_not_forward_the_flag(monkeypatch):
+    calls = _fake_run(monkeypatch)
+    monkeypatch.setattr(sys, "argv", ["wikictl.py", "levers", "signal_records"])
+    assert wikictl.main() == 0
+    assert "--no-tests" not in calls[-1]
+
+
+def test_map_cli_forwards_no_tests_alongside_repo(monkeypatch):
+    calls = _fake_run(monkeypatch)
+    monkeypatch.setattr(sys, "argv",
+                        ["wikictl.py", "map", "--no-tests", "--top", "5", "--repo", "R"])
+    assert wikictl.main() == 0
+    cmd = calls[-1]
+    assert "--no-tests" in cmd
+    assert "--repo" in cmd and cmd[cmd.index("--repo") + 1] == "R"
+
+
+def test_map_cli_without_no_tests_does_not_forward_the_flag(monkeypatch):
+    calls = _fake_run(monkeypatch)
+    monkeypatch.setattr(sys, "argv", ["wikictl.py", "map", "--top", "5", "--repo", "R"])
+    assert wikictl.main() == 0
+    assert "--no-tests" not in calls[-1]
