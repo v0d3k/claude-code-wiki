@@ -106,7 +106,27 @@ levers NAME [--repo PATH] [--limit N] [--no-tests]                # who writes t
 `--rebuild` rescans before printing; normally the post-commit hook keeps the index current.
 `--write` creates or refreshes an entity page per top module, replacing only the block between
 `<!-- structure:begin -->` and `<!-- structure:end -->`, so hand-written prose above it survives
-regeneration. A page whose markers are malformed is left untouched rather than rewritten.
+regeneration. A page whose markers are malformed is left untouched rather than rewritten. A
+module's own file name decides its page slug (`orderRouter.js` -> `order-router.md`), splitting
+camelCase first and qualifying with parent directories only on a collision within the same run --
+this is deliberate: it lets generated facts land on an existing hand-written page of the same name
+instead of creating a near-duplicate beside it.
+
+A page that did not exist before the run also earns one line in `projects/<slug>/index.md` under
+`## Entities`, e.g.:
+
+```
+- [wiki/entities/order-router.md](wiki/entities/order-router.md) - imported by 6; writes `positions`.
+```
+
+The description is synthesised only from what the structure index actually knows (imported-by
+count, what the module writes), never a guess at what the module is for. A page `--write` merely
+merged into (hand-written, or already filed by an earlier run) never gets a second line. The check
+for an existing link covers the whole file, not just the `## Entities` section, so a page a human
+already filed somewhere else is never duplicated. Missing `## Entities` heading but `## Concepts`
+or `## Sources` present: a new `## Entities` section is created right before whichever comes first,
+matching the catalog's normal section order. No index.md, or no section to anchor a missing
+`## Entities` heading on at all: nothing is written, and the run says so instead of guessing.
 
 A writer count on its own conflates two different facts: a table with 22 writers where 16 are
 tests means 6 places actually ship code against its shape, and the other 16 just fail loudly in

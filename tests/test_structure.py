@@ -625,9 +625,10 @@ def test_write_module_pages_creates_stub_pages_for_new_modules(tmp_path):
     # importer here, not an import target, so it has zero fan-in and is not
     # itself a candidate for a page (matching what `map`'s own "most
     # depended on" ranking already means).
-    written, warnings = wiki_structure.write_module_pages(IDX_WM, tmp_path, top=10)
+    created, merged, warnings = wiki_structure.write_module_pages(IDX_WM, tmp_path, top=10)
     assert warnings == []
-    assert written == ["wiki/entities/a.md"]
+    assert merged == []
+    assert created == [("wiki/entities/a.md", "src/a.js")]
     page = (tmp_path / "wiki" / "entities" / "a.md").read_text(encoding="utf-8")
     assert "What this module is for: not written yet." in page
     assert "**Path:** `src/a.js`" in page
@@ -658,11 +659,12 @@ def test_write_module_pages_preserves_hand_written_prose_across_regeneration(tmp
         "src/a.js": {"imports": [], "writes": ["t1", "t2"], "env": [], "emits": []},
         "src/b.js": {"imports": ["src/a.js"], "writes": [], "env": [], "emits": []},
     }}
-    written, warnings = wiki_structure.write_module_pages(idx_v2, tmp_path, top=10)
+    created, merged, warnings = wiki_structure.write_module_pages(idx_v2, tmp_path, top=10)
 
     final = page.read_text(encoding="utf-8")
     assert warnings == []
-    assert "wiki/entities/a.md" in written
+    assert created == []                                        # page already existed -> merged, not created
+    assert merged == [("wiki/entities/a.md", "src/a.js")]
     assert "Hand-written summary sentence that must survive regeneration." in final
     assert "`t2`" in final                                  # block was refreshed
     assert final.count(wiki_structure.STRUCT_BEGIN) == 1     # not duplicated
@@ -677,9 +679,10 @@ def test_write_module_pages_disambiguates_a_real_collision_shape(tmp_path):
         "src/c.js": {"imports": ["packages/a/src/index.js", "packages/b/src/index.js"],
                      "writes": [], "env": [], "emits": []},
     }}
-    written, warnings = wiki_structure.write_module_pages(idx, tmp_path, top=10)
+    created, merged, warnings = wiki_structure.write_module_pages(idx, tmp_path, top=10)
     assert warnings == []
-    assert set(written) == {"wiki/entities/index.md", "wiki/entities/src-index.md"}
+    assert merged == []
+    assert {p for p, _rel in created} == {"wiki/entities/index.md", "wiki/entities/src-index.md"}
     a_page = (tmp_path / "wiki" / "entities" / "index.md").read_text(encoding="utf-8")
     b_page = (tmp_path / "wiki" / "entities" / "src-index.md").read_text(encoding="utf-8")
     assert "**Path:** `packages/a/src/index.js`" in a_page
@@ -692,9 +695,10 @@ def test_write_module_pages_refuses_and_preserves_a_page_with_malformed_markers(
     broken = "# a\n\nHand notes.\n\n" + wiki_structure.STRUCT_BEGIN + "\nhalf-written, crashed here\n"
     (out_dir / "a.md").write_text(broken, encoding="utf-8")
 
-    written, warnings = wiki_structure.write_module_pages(IDX_WM, tmp_path, top=10)
+    created, merged, warnings = wiki_structure.write_module_pages(IDX_WM, tmp_path, top=10)
 
-    assert "wiki/entities/a.md" not in written
+    touched = {p for p, _rel in created + merged}
+    assert "wiki/entities/a.md" not in touched
     assert any("malformed" in w for w in warnings)
     assert (out_dir / "a.md").read_text(encoding="utf-8") == broken  # untouched, nothing lost
 
@@ -710,11 +714,14 @@ def test_cmd_map_write_reports_missing_vault_project_without_crashing(tmp_path, 
     assert wiki_structure.cmd_map(args) == 1
 
 
-def test_cmd_map_write_creates_pages_under_the_isolated_vault(tmp_path, monkeypatch):
+def test_cmd_map_write_creates_pages_under_the_isolated_vault(tmp_path, monkeypatch, capsys):
     # isolated_home (autouse, see conftest.py) already points wiki_paths at a
     # scratch config+vault under this test's own tmp_path -- this exercises
     # the real vault()-resolution path in cmd_map without touching the real
-    # Obsidian vault.
+    # Obsidian vault. No index.md is scaffolded here on purpose: cmd_map must
+    # still write the pages and just note the catalog could not be filed,
+    # not fail the whole command (see test_cmd_map_write_also_files_the_catalog
+    # for the index.md-present path).
     import wiki_paths
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -727,6 +734,33 @@ def test_cmd_map_write_creates_pages_under_the_isolated_vault(tmp_path, monkeypa
     assert wiki_structure.cmd_map(args) == 0
     assert (project_dir / "wiki" / "entities" / "a.md").exists()
     assert not (project_dir / "wiki" / "entities" / "b.md").exists()  # zero fan-in, not ranked
+    out = capsys.readouterr().out
+    assert "catalog missing" in out
+    assert "1 new page(s) not filed" in out
+
+
+def test_cmd_map_write_also_files_the_catalog(tmp_path, capsys):
+    # The happy path end to end: an index.md with a real ## Entities section
+    # picks up a line for the newly created page.
+    import wiki_paths
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    wiki_structure.INDEX_DIR.mkdir(parents=True, exist_ok=True)
+    (wiki_structure.INDEX_DIR / f"{repo.name}.json").write_text(json.dumps(IDX_WM), encoding="utf-8")
+    project_dir = wiki_paths.vault() / "projects" / repo.name
+    (project_dir / "wiki" / "entities").mkdir(parents=True)
+    (project_dir / "index.md").write_text(
+        "# repo — Index\n\n## Analyses\n\nNone yet.\n\n## Entities\n\nNone yet.\n\n"
+        "## Concepts\n\nNone yet.\n\n## Sources\n\nNone yet.\n", encoding="utf-8")
+
+    args = argparse.Namespace(repo=str(repo), top=10, write=True)
+    assert wiki_structure.cmd_map(args) == 0
+    catalog = (project_dir / "index.md").read_text(encoding="utf-8")
+    assert "[wiki/entities/a.md](wiki/entities/a.md)" in catalog
+    assert "imported by 1" in catalog
+    assert "`t1`" in catalog
+    out = capsys.readouterr().out
+    assert "catalog missing" not in out
 
 
 # --------------------------------------------------------------------------- --no-tests (cmd_levers / cmd_map)
@@ -796,3 +830,162 @@ def test_cmd_map_no_tests_reapplies_the_threshold_after_excluding_tests(tmp_path
     assert "outcomes" not in levers_section  # only 1 non-test writer left, below the minimum-2 threshold
     assert "positions" in levers_section
     assert "test/e.test.js" not in levers_section  # test writer dropped from the listed files too
+
+
+# --------------------------------------------------------------------------- module_catalog_summary
+
+def test_module_catalog_summary_reports_imported_by_count_and_writes():
+    idx = {"v": wiki_structure.INDEX_VERSION, "files": {
+        "src/order-router.js": {"imports": [], "writes": ["orders", "positions"], "env": [], "emits": []},
+        "src/caller-one.js": {"imports": ["src/order-router.js"], "writes": [], "env": [], "emits": []},
+        "src/caller-two.js": {"imports": ["src/order-router.js"], "writes": [], "env": [], "emits": []},
+    }}
+    summary = wiki_structure.module_catalog_summary(idx, "src/order-router.js")
+    assert summary == "imported by 2; writes `orders`, `positions`."
+
+
+def test_module_catalog_summary_omits_writes_clause_when_the_module_writes_nothing():
+    idx = {"v": wiki_structure.INDEX_VERSION, "files": {
+        "src/reader.js": {"imports": [], "writes": [], "env": [], "emits": []},
+    }}
+    assert wiki_structure.module_catalog_summary(idx, "src/reader.js") == "imported by 0."
+
+
+def test_module_catalog_summary_never_guesses_a_purpose():
+    # The honest material is imported-by count and writes -- nothing that reads
+    # like an assessment of what the module is *for*.
+    idx = {"v": wiki_structure.INDEX_VERSION, "files": {
+        "src/a.js": {"imports": [], "writes": ["positions"], "env": [], "emits": []},
+    }}
+    summary = wiki_structure.module_catalog_summary(idx, "src/a.js")
+    for word in ("handles", "responsible", "manages", "is a", "provides"):
+        assert word not in summary.lower()
+
+
+# --------------------------------------------------------------------------- update_module_catalog
+
+def _catalog(tmp_path, body: str) -> Path:
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    (project_dir / "index.md").write_text(body, encoding="utf-8")
+    return project_dir
+
+
+CATALOG_WITH_ENTITIES = (
+    "# repo — Index\n\n"
+    "## Analyses\n\nNone yet.\n\n"
+    "## Entities\n\n"
+    "- [wiki/entities/order-router.md](wiki/entities/order-router.md) - "
+    "post-entry management, hand-written.\n\n"
+    "## Concepts\n\nNone yet.\n\n"
+    "## Sources\n\nNone yet.\n"
+)
+
+IDX_CATALOG = {"v": wiki_structure.INDEX_VERSION, "files": {
+    "src/a.js": {"imports": [], "writes": ["t1"], "env": [], "emits": []},
+}}
+
+
+def test_update_module_catalog_does_nothing_when_nothing_was_created(tmp_path):
+    project_dir = _catalog(tmp_path, CATALOG_WITH_ENTITIES)
+    before = (project_dir / "index.md").read_text(encoding="utf-8")
+    note = wiki_structure.update_module_catalog(IDX_CATALOG, project_dir, [])
+    assert note is None
+    assert (project_dir / "index.md").read_text(encoding="utf-8") == before
+
+
+def test_update_module_catalog_warns_when_index_missing(tmp_path):
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    note = wiki_structure.update_module_catalog(
+        IDX_CATALOG, project_dir, [("wiki/entities/a.md", "src/a.js")])
+    assert note is not None
+    assert "catalog missing" in note
+    assert not (project_dir / "index.md").exists()
+
+
+def test_update_module_catalog_appends_a_line_without_touching_the_hand_written_one(tmp_path):
+    project_dir = _catalog(tmp_path, CATALOG_WITH_ENTITIES)
+    note = wiki_structure.update_module_catalog(
+        IDX_CATALOG, project_dir, [("wiki/entities/a.md", "src/a.js")])
+    assert note is None
+    text = (project_dir / "index.md").read_text(encoding="utf-8")
+    assert "[wiki/entities/order-router.md](wiki/entities/order-router.md) - " \
+           "post-entry management, hand-written." in text          # untouched
+    assert "[wiki/entities/a.md](wiki/entities/a.md) - imported by 0; writes `t1`." in text
+    assert text.count("## Entities") == 1
+
+
+def test_update_module_catalog_is_idempotent_on_a_second_call(tmp_path):
+    project_dir = _catalog(tmp_path, CATALOG_WITH_ENTITIES)
+    created = [("wiki/entities/a.md", "src/a.js")]
+    wiki_structure.update_module_catalog(IDX_CATALOG, project_dir, created)
+    once = (project_dir / "index.md").read_text(encoding="utf-8")
+
+    note = wiki_structure.update_module_catalog(IDX_CATALOG, project_dir, created)
+
+    assert note is None
+    twice = (project_dir / "index.md").read_text(encoding="utf-8")
+    assert once == twice
+    assert twice.count("wiki/entities/a.md") == 2  # one link: appears in [text](target) once each
+
+
+def test_update_module_catalog_checks_the_whole_file_not_just_the_entities_section(tmp_path):
+    # A human filed the link under a different section already -- the tool
+    # must not add a second line for the same page inside Entities.
+    body = (
+        "# repo — Index\n\n"
+        "## Analyses\n\n"
+        "- [wiki/entities/a.md](wiki/entities/a.md) - filed here by a human for now.\n\n"
+        "## Entities\n\nNone yet.\n\n"
+        "## Concepts\n\nNone yet.\n\n"
+        "## Sources\n\nNone yet.\n"
+    )
+    project_dir = _catalog(tmp_path, body)
+    note = wiki_structure.update_module_catalog(
+        IDX_CATALOG, project_dir, [("wiki/entities/a.md", "src/a.js")])
+    assert note is None
+    text = (project_dir / "index.md").read_text(encoding="utf-8")
+    assert text.count("wiki/entities/a.md") == 2  # still only the one link, under Analyses
+    assert "None yet." in text                    # Entities section left alone
+
+
+def test_update_module_catalog_creates_the_entities_section_before_concepts_when_missing(tmp_path):
+    body = (
+        "# repo — Index\n\n"
+        "## Analyses\n\nNone yet.\n\n"
+        "## Concepts\n\nNone yet.\n\n"
+        "## Sources\n\nNone yet.\n"
+    )
+    project_dir = _catalog(tmp_path, body)
+    note = wiki_structure.update_module_catalog(
+        IDX_CATALOG, project_dir, [("wiki/entities/a.md", "src/a.js")])
+    assert note is None
+    text = (project_dir / "index.md").read_text(encoding="utf-8")
+    assert text.index("## Entities") < text.index("## Concepts") < text.index("## Sources")
+    assert "[wiki/entities/a.md](wiki/entities/a.md)" in text
+
+
+def test_update_module_catalog_creates_the_entities_section_before_sources_when_concepts_is_also_missing(tmp_path):
+    body = "# repo — Index\n\n## Analyses\n\nNone yet.\n\n## Sources\n\nNone yet.\n"
+    project_dir = _catalog(tmp_path, body)
+    note = wiki_structure.update_module_catalog(
+        IDX_CATALOG, project_dir, [("wiki/entities/a.md", "src/a.js")])
+    assert note is None
+    text = (project_dir / "index.md").read_text(encoding="utf-8")
+    assert text.index("## Entities") < text.index("## Sources")
+    assert "[wiki/entities/a.md](wiki/entities/a.md)" in text
+
+
+def test_update_module_catalog_refuses_when_there_is_no_anchor_at_all(tmp_path):
+    # No ## Entities, no ## Concepts, no ## Sources -- the catalog does not
+    # follow the known schema closely enough to guess where a new section
+    # belongs. Nothing is written.
+    body = "# repo — Index\n\n## Analyses\n\nNone yet.\n"
+    project_dir = _catalog(tmp_path, body)
+    before = (project_dir / "index.md").read_text(encoding="utf-8")
+    note = wiki_structure.update_module_catalog(
+        IDX_CATALOG, project_dir, [("wiki/entities/a.md", "src/a.js")])
+    assert note is not None
+    assert "no anchor" in note or "no ## Concepts" in note or "no ## Entities" in note
+    assert (project_dir / "index.md").read_text(encoding="utf-8") == before

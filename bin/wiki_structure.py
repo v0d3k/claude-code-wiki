@@ -480,15 +480,16 @@ def cmd_map(args) -> int:
         if not project_dir.exists():
             print(f"no vault directory for {root.name}; ingest one block first")
             return 1
-        pages, page_warnings = write_module_pages(idx, project_dir, args.top)
-        print(f"\nwrote {len(pages)} module page(s):")
-        for p in pages:
+        created, merged, page_warnings = write_module_pages(idx, project_dir, args.top)
+        pages = sorted(created + merged)
+        print(f"\nwrote {len(pages)} module page(s) ({len(created)} new):")
+        for p, _rel in pages:
             print(f"  {p}")
         for w in page_warnings:
             print(f"  warning: {w}")
-        if pages:
-            print("\nnote: new pages are not linked from index.md yet -- add the links "
-                  "yourself, or leave it for a future ingest pass.")
+        catalog_note = update_module_catalog(idx, project_dir, created)
+        if catalog_note:
+            print(f"\n{catalog_note}")
     print("\nStatic requires and literal SQL only. Dynamic requires, ORM calls and "
           "computed table names are invisible to this index.")
     return 0
@@ -623,16 +624,32 @@ def _atomic_write(path: Path, content: str) -> None:
     tmp.replace(path)
 
 
-def write_module_pages(idx: dict, vault_project: Path, top: int) -> tuple[list[str], list[str]]:
+def write_module_pages(idx: dict, vault_project: Path,
+                        top: int) -> tuple[list[tuple[str, str]], list[tuple[str, str]], list[str]]:
     """Create or refresh the machine block; never touch prose outside it.
 
-    Returns (written, warnings): vault-relative paths of pages actually
-    written, and human-readable warnings for anything skipped (an
-    unresolvable slug collision, or a page whose markers are malformed).
+    Returns (created, merged, warnings). `created` and `merged` are both
+    lists of (vault-relative page path, source module path) pairs -- the
+    distinction is which branch below wrote the page:
+
+      - `created`: no file sat at that page path before this call. This is
+        the only case update_module_catalog() should ever add a catalog
+        line for.
+      - `merged`: a file was already there and its structure block was
+        spliced in place. That pre-existing file is either hand-written
+        prose a human already catalogued (the whole point of module_slug()
+        landing generated facts on an existing page instead of a
+        near-duplicate), or a page an earlier run of this tool created --
+        and therefore already catalogued on that earlier run. Either way, a
+        page in `merged` must never earn a second catalog line.
+
+    `warnings` is unchanged from before: an unresolvable slug collision, or
+    a page whose markers are malformed.
     """
     out_dir = vault_project / "wiki" / "entities"
     out_dir.mkdir(parents=True, exist_ok=True)
-    written: list[str] = []
+    created: list[tuple[str, str]] = []
+    merged: list[tuple[str, str]] = []
     warnings: list[str] = []
     taken: set[str] = set()
     # -kv[1] ranks by fan-in descending; the kv[0] tiebreaker makes the
@@ -648,21 +665,123 @@ def write_module_pages(idx: dict, vault_project: Path, top: int) -> tuple[list[s
             continue
         taken.add(slug)
         page = out_dir / f"{slug}.md"
+        page_rel = str(page.relative_to(vault_project)).replace("\\", "/")
         block = module_page(idx, rel)
         if page.exists():
             text = page.read_text(encoding="utf-8")
-            merged = _merge_structure_block(text, block)
-            if merged is None:
+            merged_text = _merge_structure_block(text, block)
+            if merged_text is None:
                 warnings.append(f"{page.relative_to(vault_project).as_posix()}: structure "
                                 "markers are malformed (duplicated, one-sided, or reversed) -- "
                                 "refused to write; fix the page by hand first")
                 continue
-            _atomic_write(page, merged)
+            _atomic_write(page, merged_text)
+            merged.append((page_rel, rel))
         else:
             _atomic_write(page, f"# {Path(rel).stem}\n\nWhat this module is for: not written yet.\n\n"
                                 f"{block}\n")
-        written.append(str(page.relative_to(vault_project)).replace("\\", "/"))
-    return written, warnings
+            created.append((page_rel, rel))
+    return created, merged, warnings
+
+
+# --------------------------------------------------------------------------- project catalog (index.md)
+
+CATALOG_SECTIONS_AFTER_ENTITIES = ("Concepts", "Sources")
+
+
+def module_catalog_summary(idx: dict, rel: str) -> str:
+    """Factual, assessment-free blurb for a generated page's catalog line.
+
+    Only imported-by count and what the module writes -- the honest material
+    a structure index actually has. The index has no idea what a module is
+    *for*; a line that guessed at one would be exactly the kind of confident
+    nonsense a hand-curated catalog must not carry.
+    """
+    facts = idx.get("files", {}).get(rel, {})
+    importers = sorted(r for r, f in idx.get("files", {}).items() if rel in f.get("imports", []))
+    bits = [f"imported by {len(importers)}"]
+    writes = facts.get("writes") or []
+    if writes:
+        shown = ", ".join(f"`{w}`" for w in writes[:5])
+        bits.append(f"writes {shown}" + (" …" if len(writes) > 5 else ""))
+    return "; ".join(bits) + "."
+
+
+def _section_heading_lines(lines: list[str]) -> dict[str, int]:
+    return {ln[3:].strip(): i for i, ln in enumerate(lines) if ln.startswith("## ")}
+
+
+def update_module_catalog(idx: dict, project_dir: Path, created: list[tuple[str, str]]) -> str | None:
+    """File one `## Entities` catalog line per newly CREATED page (see
+    write_module_pages) into `project_dir/index.md`.
+
+    Only `created` pages are ever considered -- a page write_module_pages
+    merged into already has a human-written description (it existed before
+    this run) or was already filed on an earlier run; either way a second
+    line would duplicate the entry or clobber good prose with a generated
+    stub.
+
+    Idempotent two ways: nothing to do at all when `created` is empty (the
+    common case -- a second `map --write` run in a row), and a link already
+    present ANYWHERE in the file -- not only inside the `## Entities`
+    section, a human may have filed it elsewhere -- is skipped rather than
+    duplicated.
+
+    When `## Entities` itself is missing, a new heading is created directly
+    before whichever of `## Concepts` / `## Sources` appears first -- both
+    are defined (see templates/projects/_template/index.md) to come after
+    Entities, so either is a safe anchor. If neither is present the catalog
+    does not follow the known schema closely enough to guess at a location,
+    and nothing is written.
+
+    Returns a human-readable note when nothing could be filed (index.md
+    missing, or no anchor for a missing `## Entities` heading), else None.
+    Writes atomically: either every new link lands, or the file is left
+    exactly as it was found.
+    """
+    if not created:
+        return None
+    index_path = project_dir / "index.md"
+    if not index_path.exists():
+        return (f"{index_path}: catalog missing -- {len(created)} new page(s) not filed")
+
+    text = index_path.read_text(encoding="utf-8")
+    to_add = [(page_rel, mod_rel) for page_rel, mod_rel in created if f"]({page_rel})" not in text]
+    if not to_add:
+        return None
+
+    lines = text.split("\n")
+    headings = _section_heading_lines(lines)
+    if "Entities" not in headings:
+        anchor = next((h for h in CATALOG_SECTIONS_AFTER_ENTITIES if h in headings), None)
+        if anchor is None:
+            return (f"{index_path.name} has no ## Entities section and no ## Concepts / "
+                    f"## Sources heading to anchor a new one before -- {len(to_add)} new "
+                    "page(s) not filed (add the section by hand first)")
+        i = headings[anchor]
+        prefix = lines[:i]
+        if prefix and prefix[-1].strip() != "":
+            prefix = prefix + [""]
+        lines = prefix + ["## Entities", ""] + lines[i:]
+        headings = _section_heading_lines(lines)
+
+    start = headings["Entities"] + 1
+    end = start
+    while end < len(lines) and not lines[end].startswith("## "):
+        end += 1
+    # Keep any hand-written lines already inside the section, drop the
+    # template's "None yet." placeholder, then append the new links.
+    body = [ln for ln in lines[start:end] if ln.strip() != "None yet."]
+    while body and not body[0].strip():
+        body.pop(0)
+    while body and not body[-1].strip():
+        body.pop()
+    for page_rel, mod_rel in to_add:
+        body.append(f"- [{page_rel}]({page_rel}) - {module_catalog_summary(idx, mod_rel)}")
+
+    lines[start:end] = ["", *body, ""]
+    _atomic_write(index_path, "\n".join(lines))
+    return None
 
 
 def main() -> int:
