@@ -23,7 +23,9 @@ your commits  ────►  structure index ──►  wikictl map / path / l
 
 ## Two problems, measured
 
-These are numbers from one real repository — 1231 commits, 4400 files — not hypotheticals.
+These are numbers from one real repository — 1231 commits, 4400 files — not hypotheticals. Every
+count and ratio below was measured. Identifiers are renamed throughout, because the repository is
+private; nothing else about the examples is altered.
 
 **Knowledge evaporates.** A hand-maintained wiki covered phases 187–267 and then stopped for seven weeks while the project kept moving. Nobody forgot on purpose; updating it simply depended on someone remembering to ask. Meanwhile the things that mattered — which PnL number is trustworthy, why a feature was built and then disabled, which measurement turned out to be self-fulfilling — lived only in commit messages and in one person's head.
 
@@ -70,7 +72,7 @@ the file lands:
 
 ```
 - `renderSafeText` — this exact body already exists as `esc`, `escHtml`,
-  `escapeAlertHtml` in 12 place(s): src/analytics/dailyReportHtml.js,
+  `escapeAlertHtml` in 12 place(s): src/report/dailyReportHtml.js,
   src/delivery/notifyHub.js and 9 more.
 ```
 
@@ -81,15 +83,15 @@ resource — a SQL table, an env key, an emitted event. It refreshes on every co
 drift the way a generated snapshot does. `wikictl map` prints the shape, `wikictl path A B` shows
 how two files connect, `wikictl levers positions` lists every writer of one table.
 
-The second half is the half an import graph cannot give you. On the same repository,
-`src/execution/ledger.js` is imported by 11 non-test files. Twenty-one other non-test files
-write to the ten tables it owns — and **not one of them imports it**. The import graph shows you
-the eleven; the twenty-one that break when you change a column are invisible to it.
+The second half is the half an import graph cannot give you. On the same repository, the ledger
+module is imported by 11 non-test files. Twenty-one other non-test files write to the ten tables it
+owns — and **not one of them imports it**. The import graph shows you the eleven; the twenty-one
+that break when you change a column are invisible to it.
 
 ```
 signal_records   56 writers   (17 outside the test suite)
-outcomes              23
-positions               22
+outcomes         23
+positions        22
 ```
 
 Counts include tests, which is usually what you want before a migration and occasionally not —

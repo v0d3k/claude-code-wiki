@@ -3,3 +3,6 @@ __pycache__/
 *.tmp
 *.bak
 .wiki-raw/
+
+# Working plans: local design drafts, superseded by docs/
+docs/plans/

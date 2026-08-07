@@ -47,7 +47,7 @@ def isolated_home(tmp_path, monkeypatch):
     # wiki_structure binds INDEX_DIR = STATE_DIR / "structure" at import time,
     # same reason as above: patching wiki_paths.STATE_DIR alone does not move
     # it, and without this every `build()` in a test would write into the
-    # developer's real C:\Users\user\.claude\wiki-state\structure\.
+    # developer's real ~/.claude/wiki-state/structure/.
     import wiki_structure
     monkeypatch.setattr(wiki_structure, "INDEX_DIR", config_home / "wiki-state" / "structure")
 
