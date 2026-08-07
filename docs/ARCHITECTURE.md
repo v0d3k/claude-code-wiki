@@ -39,7 +39,29 @@ Layer 1 is written by hooks with no model involved: fast, offline, and unable to
 | `bin/wiki_ingest.py` | Engine selection, the JSON-verdict loop, page writing, index and log updates. |
 | `bin/wiki_install_git_hooks.py` | Idempotent post-commit installer, including the "marker present but path stale" repair. |
 | `bin/wiki_paths.py` | Single source of truth for paths and config. |
+| `bin/wiki_structure.py` | Import and lever extraction, the graph queries behind `map`/`path`/`levers`, and the generated module-page block. |
 | `wikictl.py` | The admin CLI. |
+
+## Three indexes, three questions
+
+| Index | Question it answers | Refreshed |
+| --- | --- | --- |
+| symbols | does this name, or this body, already exist | post-commit, incremental |
+| structure | what will I disturb if I touch this | post-commit, incremental |
+| the wiki itself | why was this decided, and what is true | ingest, on blocks that earn a page |
+
+The first two are parsed, not inferred: no model, no daemon, no network. The third is the only one
+that costs a model call.
+
+The structure index deliberately stops at static requires and literal SQL. Runtime coupling — a
+worker started by a process manager, a table reached through an ORM, a require assembled at
+runtime — is invisible to it, and every command that prints from it says so. A map that quietly
+omits a third of the edges is worse than one that admits its boundary.
+
+The two parsed indexes are stored in separate files on purpose. The duplicate guard loads the
+symbol index on every `Write` and must stay inside a few hundred milliseconds; the structure index
+for a 1195-file repository is 233 KB and has no business on that path. Only the `SessionStart`
+orientation and the `map`/`path`/`levers` commands read it.
 
 ## Ingest flow
 

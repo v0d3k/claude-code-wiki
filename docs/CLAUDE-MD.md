@@ -27,6 +27,12 @@ project has no pages yet — that is normal.
 already. The guard will warn on `Write` anyway, but not reaching that point is better.
 `wikictl.py dupes` shows the overall picture.
 
+**Look at the structure before changing it.** `wikictl.py map` names the modules
+everything depends on and the resources several files write to; `wikictl.py levers
+<table>` answers "who else touches this" before you change a schema or a write path;
+`wikictl.py path <a> <b>` shows how two files connect. The orientation injected at
+session start is a summary of the first of those, not a substitute for any of them.
+
 **File durable findings immediately.** A decision with its reason, a diagnosis, a
 measurement with its sample size, an architecture change, a trap someone will hit
 again — write the page under `projects/<slug>/wiki/` and link it from that project's
@@ -42,6 +48,8 @@ git hooks, or the symbol index. Everything goes through `wikictl.py`.
 ## Why each rule is there
 
 **"Read before re-deriving"** is the one that pays for the whole system. Without it a model treats the injected catalog as decoration and re-analyses from scratch anyway — the catalog is a list of titles, and nothing compels opening them. Naming the specific failure modes (architecture, old diagnoses, metrics, rejected options) works better than a general "use the wiki", because those are the four things assistants actually redo.
+
+**"Look at the structure before changing it"** covers the coupling a name check cannot see. On the repository these docs quote, `ledger.js` is imported by 35 files while 65 write to the ten tables it owns, and only 15 do both — so fifty files depend on its schema without any import to find them by. `levers` is the only cheap way to ask that question before a migration.
 
 **"Check before writing code"** exists because the guard is a net, not a plan. It fires when a file is being written, which is already late: the model has composed the helper and now has to undo it. A `where` call before writing costs one tool call and avoids the rework. Keep both — the instruction for the disciplined path, the guard for when discipline slips.
 

@@ -26,6 +26,9 @@ Run the command, then report what it printed in plain language. Do not re-implem
 | где уже определено имя | `where <name>` |
 | сколько дублей в проекте | `dupes [--kind identical\|diverged\|renamed]` |
 | пересобрать индекс символов | `symbols [--full]` |
+| карта проекта, кто на кого завязан | `map [--top N] [--rebuild] [--write]` |
+| как связаны два файла | `path <a> <b>` |
+| кто ещё пишет в эту таблицу / читает ключ | `levers <name> [--limit N]` |
 | снеси / удали систему | `uninstall` |
 | фоновый прогон по расписанию | `schedule install|remove|status` |
 
@@ -67,12 +70,14 @@ A `SessionStart` hook injects the current project's catalog into context, so an 
 ## Files
 
 ```
-~/.claude/skills/llm-wiki/
+~/.claude/skills/claude-code-wiki/
   wikictl.py            the CLI described above
   bin/                  hooks and engine modules (settings.json points here)
   templates/            vault skeleton copied on install
 ~/.claude/wiki-state/
   wiki-config.json      vault path, repo roots, engines, schedule
+  symbols/<repo>.json   names and body hashes, behind `where` and the guard
+  structure/<repo>.json imports and levers, behind `map`, `path`, `levers`
   ingest-runs.log       one line per scheduled run
   <session>.json        per-session recording cursors
 ```

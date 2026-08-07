@@ -14,6 +14,9 @@ your commits  ─┼─►  <repo>/.wiki-raw/2026-08-05.md  ─►  ingest  ─�
                      SessionStart hook ◄────────────  catalog injected ◄────────┘
 
 your commits  ────►  symbol index  ────►  PreToolUse guard: "num already exists in 43 files"
+your commits  ────►  structure index ──►  wikictl map / path / levers, and ~1 KB of orientation
+                                          at session start: what everything depends on, and
+                                          which tables have more than one writer
 ```
 
 ---
@@ -72,6 +75,25 @@ the file lands:
 ```
 
 It warns and never blocks. A same-named local helper is sometimes correct, and a hook cannot tell.
+
+**Maps the structure.** A second index records who imports whom, and who writes to each shared
+resource — a SQL table, an env key, an emitted event. It refreshes on every commit, so it cannot
+drift the way a generated snapshot does. `wikictl map` prints the shape, `wikictl path A B` shows
+how two files connect, `wikictl levers positions` lists every writer of one table.
+
+The second half is the half an import graph cannot give you. On the same repository,
+`src/execution/ledger.js` is imported by 35 files — and 65 files write to the ten tables it
+owns. Only 15 of them do both. **Fifty files reach its tables without ever importing it**, which
+is exactly the coupling that breaks when you change a schema:
+
+```
+signal_records   56 writers
+outcomes              23
+positions               22
+```
+
+Static requires and literal SQL only. Dynamic requires, ORM calls and computed table names are
+invisible to this index, and every command that prints from it says so.
 
 ---
 
@@ -149,6 +171,9 @@ The vault is plain markdown with relative links — it renders as a graph in Obs
 | `where NAME` | every definition of a name, with `file:line` |
 | `dupes [--kind identical\|diverged\|renamed]` | duplication split by kind, worst first |
 | `symbols [--full]` | rebuild the symbol index |
+| `map [--top N] [--rebuild] [--write]` | fan-in, fan-out, and the resources several files write to |
+| `path A B` | the import route between two files, or why there isn't one |
+| `levers NAME` | every file that writes this table, reads this env key, or emits this event |
 | `search "QUERY"` | grep the vault |
 | `schedule [install\|remove\|status]` | optional background ingest: Task Scheduler or cron |
 | `add PATH` / `remove SLUG` | wire or unwire one repository |
@@ -187,8 +212,9 @@ language server, and the two do not overlap:
 | --- | --- | --- |
 | Reachable from a hook or a script | yes | **no** — MCP tools only, inside a session |
 | Lookup cost | ~8 ms | language-server round trip |
-| Knows | names, `file:line` | symbols, references, scope, types |
+| Knows | names, `file:line`, imports, SQL writes | symbols, references, scope, types |
 | "Who calls this?" | no | yes |
+| "Who else writes this table?" | yes | no — a language server does not read SQL strings |
 | Symbol-precise edits | no | yes |
 | Can power an automatic guard | yes | no |
 
@@ -234,7 +260,7 @@ claude mcp add serena -s user -- serena start-mcp-server --project-from-cwd
 | `<repo>/.git/hooks/post-commit` | four-line stub, appended to an existing POSIX hook, never to a non-shell one |
 | `<repo>/.git/info/exclude` | `.wiki-raw/` added here, so the journal never shows in `git status` or reaches a public repo |
 | `~/.claude/settings.json` | four hook entries, each tagged `--owner=claude-code-wiki` |
-| `~/.claude/wiki-state/` | config, session cursors, run logs, the symbol index |
+| `~/.claude/wiki-state/` | config, session cursors, run logs, the symbol and structure indexes |
 
 `uninstall` reverses all of it and leaves the notes. `settings.json` is backed up with a timestamp on every write, and only entries carrying the owner flag are ever removed — your other hooks are untouched.
 

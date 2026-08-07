@@ -94,6 +94,32 @@ The index lives at `wiki-state/symbols/<repo>.json` and is refreshed by the post
 re-parses only the files in that commit. A format change triggers a full rebuild automatically.
 `where` exits 1 when the name is unknown, and suggests similar names.
 
+## map / path / levers
+
+```
+map [--repo PATH] [--top N] [--rebuild] [--write]   # fan-in, fan-out, contended levers
+path SOURCE TARGET [--repo PATH]                    # import route between two repo-relative files
+levers NAME [--repo PATH] [--limit N]               # who writes this table, reads this env key,
+                                                    #   or emits this event
+```
+
+`--rebuild` rescans before printing; normally the post-commit hook keeps the index current.
+`--write` creates or refreshes an entity page per top module, replacing only the block between
+`<!-- structure:begin -->` and `<!-- structure:end -->`, so hand-written prose above it survives
+regeneration. A page whose markers are malformed is left untouched rather than rewritten.
+
+`path` distinguishes the two ways it can fail: an endpoint that is not in the index at all (with
+near-match suggestions, since a typo is the likelier case in a large repo) versus two files that
+are both indexed and simply do not connect. Windows-style backslashes in either argument are
+normalised.
+
+The index lives at `wiki-state/structure/<repo>.json`, kept separate from the symbol index because
+the duplicate guard loads that one on every `Write` and must stay under a few hundred milliseconds.
+
+Static requires and literal SQL only. A worker started by a process manager, a table reached
+through an ORM, a require assembled at runtime — none of it is here, and every command that prints
+from the index repeats that caveat.
+
 ## add / remove
 
 ```
@@ -131,6 +157,9 @@ Case-insensitive substring search across every markdown file in the vault. `--li
 | `guard_enabled` | `true` | warn when new code re-declares an existing name |
 | `guard_on_edit` | `false` | also guard `Edit`; costs ~190 ms per edit |
 | `guard_min_existing` | `1` | warn once the name exists in this many other files |
+| `orient_enabled` | `true` | inject a structure orientation at session start (~1 KB) |
+| `orient_modules` | `8` | how many modules the orientation names |
+| `orient_levers` | `5` | how many contended resources it names |
 | `exclude_repos` | `[]` | repository names that must never become projects (e.g. a parent directory that is itself a repo) |
 | `auto_install_git_hooks` | `true` | let the SessionStart hook wire repos under the roots |
 | `schedule.*` | 6 h from 04:07, lint Sunday 05:07 | used at install time |
@@ -141,6 +170,7 @@ Case-insensitive substring search across every markdown file in the vault. `--li
 | --- | --- |
 | `wiki-state/wiki-config.json` | the config above |
 | `wiki-state/symbols/<repo>.json` | the symbol index behind `where` and the guard |
+| `wiki-state/structure/<repo>.json` | the import and lever index behind `map`, `path`, `levers` and the session orientation |
 | `wiki-state/<session-id>.json` | per-session transcript cursor and accumulated block |
 | `wiki-state/ingest-runs.log` | one line per scheduled run |
 | `wiki-state/ingest-last-run.txt` / `.err` | stdout and stderr of the last run |
